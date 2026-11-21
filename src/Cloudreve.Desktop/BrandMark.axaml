@@ -1,0 +1,4 @@
+<Viewbox xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" x:Class="Cloudreve.Desktop.BrandMark" x:ClassModifier="internal" HorizontalAlignment="Left" AutomationProperties.Name="Cloudreve">
+  <Viewbox.Resources><ResourceDictionary><ResourceDictionary.MergedDictionaries><ResourceInclude Source="/Assets/Wordmark.axaml" /></ResourceDictionary.MergedDictionaries></ResourceDictionary></Viewbox.Resources>
+  <Canvas Width="1351" Height="331"><Image Source="/Assets/cloudreve.png" Width="331" Height="331" /><Path Canvas.Left="55.19182" Canvas.Top="-51.5495" Data="{StaticResource WordmarkLetters}" Fill="{DynamicResource BrandInk}" /></Canvas>
+</Viewbox>

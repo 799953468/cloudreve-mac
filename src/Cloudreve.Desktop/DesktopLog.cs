@@ -6,16 +6,19 @@ namespace Cloudreve.Desktop;
 
 internal static class DesktopLog
 {
-    internal static Logger CreateLogger(string directory, LoggingLevelSwitch? level = null)
+    internal static Logger CreateLogger(string directory, LoggingLevelSwitch? level = null, bool logToFile = true, int retainedFiles = 7)
     {
-        return new LoggerConfiguration()
-            .MinimumLevel.ControlledBy(level ?? new LoggingLevelSwitch())
-            .WriteTo.File(Path.Combine(directory, "desktop-.log"),
+        var config = new LoggerConfiguration().MinimumLevel.ControlledBy(level ?? new LoggingLevelSwitch());
+        if (logToFile)
+        {
+            config.WriteTo.File(Path.Combine(directory, "desktop-.log"),
                 rollingInterval: RollingInterval.Day,
                 fileSizeLimitBytes: 5 * 1024 * 1024,
                 rollOnFileSizeLimit: true,
-                retainedFileCountLimit: 7)
-            .CreateLogger();
+                retainedFileCountLimit: retainedFiles);
+        }
+
+        return config.CreateLogger();
     }
 
     internal static void WriteFailure(this ILogger logger, LogEventLevel level, string operation, Exception exception)

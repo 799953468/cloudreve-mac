@@ -1,4 +1,4 @@
-Cloudreve desktop artwork (cloudreve.png, Cloudreve.icns and Wordmark.axaml)
+Cloudreve desktop artwork (cloudreve.png, Cloudreve.icns and Wordmark.axaml) and interface translations (Windows.*.json, from ui/public/locales).
 Wordmark outlines adapted from ui/src/assets/logo.svg and logo_light.svg at the same commit.
 Source: cloudreve/desktop, src-tauri/icons/{128x128@2x.png,icon.icns}, commit 71447408df6db38362703fbbb61dc534ea210470
 

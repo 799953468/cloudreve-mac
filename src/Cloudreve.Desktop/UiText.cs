@@ -7,13 +7,24 @@ namespace Cloudreve.Desktop;
 internal enum UiLanguage
 {
     Chinese,
-    English
+    English,
+    SystemDefault
 }
 
 internal static class UiText
 {
     private static readonly Lazy<Dictionary<string, string>> English = new(ReadEnglish);
     internal static UiLanguage Language { get; set; }
+
+    internal static UiLanguage Resolve(UiLanguage language)
+    {
+        if (language != UiLanguage.SystemDefault)
+        {
+            return language;
+        }
+
+        return CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "zh" ? UiLanguage.Chinese : UiLanguage.English;
+    }
 
     private static Dictionary<string, string> ReadEnglish()
     {

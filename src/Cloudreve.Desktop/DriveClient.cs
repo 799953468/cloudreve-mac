@@ -97,6 +97,12 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
         return DesktopLogin.Required(await JsonAsync(HttpMethod.Get, "user/me", null, cancel), "id");
     }
 
+    internal async Task<(long Used, long Total)> CapacityAsync(CancellationToken cancel)
+    {
+        var data = await JsonAsync(HttpMethod.Get, "user/capacity", null, cancel);
+        return (data.GetProperty("used").GetInt64(), data.GetProperty("total").GetInt64());
+    }
+
     internal async Task<List<DriveEntry>> ListAsync(string directory, CancellationToken cancel)
     {
         string path = "file?uri=" + Uri.EscapeDataString(directory) + "&page_size=100";

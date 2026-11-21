@@ -2,6 +2,14 @@
   <!-- Mirrors ui/src/theme.ts and the Material action palette in cloudreve/desktop. -->
   <Styles.Resources>
     <ResourceDictionary>
+      <StreamGeometry x:Key="GearIcon">M19.4 13a7 7 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a8 8 0 0 0-1.8-1L14.8 3h-4l-.4 2.9a8 8 0 0 0-1.8 1l-2.5-1-2 3.5L6.2 11a7 7 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a8 8 0 0 0 1.8 1l.4 2.9h4l.4-2.9a8 8 0 0 0 1.8-1l2.5 1 2-3.5z M12.8 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z</StreamGeometry>
+      <StreamGeometry x:Key="FolderIcon">M2 5H10L12 7H22V20H2Z</StreamGeometry>
+      <StreamGeometry x:Key="FolderOutline">M2 5H10L12 7H22V20H2Z M4 7V18H20V9H11L9 7Z</StreamGeometry>
+      <StreamGeometry x:Key="SiteIcon">M12 2a10 10 0 1 0 0 20a10 10 0 1 0 0-20 M4.2 11h3.9c.1-2.4.7-4.6 1.4-6.3A8 8 0 0 0 4.2 11 M10.1 11h3.8c-.2-3-1-5.4-1.9-6.8-.9 1.4-1.7 3.8-1.9 6.8 M16 11h3.8a8 8 0 0 0-5.3-6.3A18 18 0 0 1 16 11 M4.2 13a8 8 0 0 0 5.3 6.3A18 18 0 0 1 8.1 13z M10.1 13c.2 3 1 5.4 1.9 6.8.9-1.4 1.7-3.8 1.9-6.8z M16 13a18 18 0 0 1-1.5 6.3 8 8 0 0 0 5.3-6.3z</StreamGeometry>
+      <StreamGeometry x:Key="TrashIcon">M8 3h8l1 2h4v2H3V5h4z M5 9h14l-1 12H6z M8 11v8h2v-8z M13 11v8h2v-8z</StreamGeometry>
+      <StreamGeometry x:Key="FilterIcon">M2 5h20v2H2z M5 11h14v2H5z M9 17h6v2H9z</StreamGeometry>
+      <StreamGeometry x:Key="DriveIcon">M4 4H20L23 15V20H1V15Z M5.5 6L3.5 14H20.5L18.5 6Z M3 16V18H21V16Z</StreamGeometry>
+      <StreamGeometry x:Key="InfoIcon">M12 2A10 10 0 1 0 12 22A10 10 0 1 0 12 2 M12 4A8 8 0 1 1 12 20A8 8 0 1 1 12 4 M11 10H13V17H11Z M11 7H13V9H11Z</StreamGeometry>
       <ResourceDictionary.ThemeDictionaries>
         <ResourceDictionary x:Key="Light">
           <SolidColorBrush x:Key="BrandInk">Black</SolidColorBrush>
@@ -46,6 +54,10 @@
   <Style Selector="TextBlock.secondary">
     <Setter Property="Foreground" Value="{DynamicResource Muted}" />
   </Style>
+  <Style Selector="Button.chip"><Setter Property="Padding" Value="9,2" /><Setter Property="CornerRadius" Value="16" /><Setter Property="MinHeight" Value="24" /><Setter Property="FontSize" Value="13" /><Setter Property="VerticalContentAlignment" Value="Center" /><Setter Property="Background" Value="Transparent" /><Setter Property="BorderBrush" Value="{DynamicResource Divider}" /></Style>
+  <Style Selector="Button.chip.selected"><Setter Property="Background" Value="{DynamicResource SelectedFill}" /></Style>
+  <Style Selector="Button.chip.add"><Setter Property="Background" Value="{DynamicResource Primary}" /><Setter Property="Foreground" Value="{DynamicResource OnPrimary}" /></Style>
+  <Style Selector="Border.card"><Setter Property="BorderThickness" Value="1" /><Setter Property="BorderBrush" Value="{DynamicResource Divider}" /><Setter Property="CornerRadius" Value="12" /><Setter Property="Padding" Value="16" /></Style>
   <Style Selector="Button.primary, Button.tool">
     <Setter Property="CornerRadius" Value="12" />
     <Setter Property="VerticalContentAlignment" Value="Center" />
@@ -65,6 +77,7 @@
     <Setter Property="Foreground" Value="{DynamicResource Muted}" />
     <Setter Property="Padding" Value="4" />
   </Style>
+  <Style Selector="Button.tool.driveLink"><Setter Property="Foreground" Value="{DynamicResource Muted}" /></Style>
   <Style Selector="Button.primary">
     <Setter Property="Background" Value="{DynamicResource Primary}" />
     <Setter Property="Foreground" Value="{DynamicResource OnPrimary}" />

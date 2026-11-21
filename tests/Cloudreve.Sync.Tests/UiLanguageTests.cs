@@ -26,18 +26,19 @@ public sealed class UiLanguageTests
             {
                 await ui.Dispatch(() =>
                 {
-                    var window = new WorkspaceWindow(new SessionFileStore(temp.FullName));
+                    var host = new WorkspaceHost(new DriveProfiles(new SessionFileStore(temp.FullName)));
+                    using var api = new HttpClient();
+                    var window = new AddDriveWindow(host, api);
                     try
                     {
                         window.Show();
-                        Assert.Equal("Connect drive", window.ConnectButton.Content);
-                        Assert.Equal("Download…", window.DownloadButton.Content);
-                        Assert.Equal("Resolve conflicts…", window.ConflictsItem.Header);
+                        Assert.Equal("Add Drive", window.Heading.Text);
+                        Assert.Equal("Connect", window.Next.Content);
+                        Assert.Equal("Site URL *", window.Endpoint.PlaceholderText);
                     }
                     finally
                     {
                         window.Close();
-                        window.Stop();
                     }
                 }, TestContext.Current.CancellationToken);
             }

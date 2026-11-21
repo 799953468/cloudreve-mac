@@ -1,15 +1,19 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <TrayLibrary>$(BaseIntermediateOutputPath)tray/$(Configuration)/libCloudreveTray.dylib</TrayLibrary>
     <OutputType>WinExe</OutputType>
     <AssemblyName>CloudreveMac</AssemblyName>
+    <Version>0.1.0</Version>
     <RootNamespace>Cloudreve.Desktop</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Features>runtime-async=on</Features>
   </PropertyGroup>
   <ItemGroup>
+    <None Include="$(TrayLibrary)" Link="libCloudreveTray.dylib" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Condition="$([MSBuild]::IsOSPlatform('OSX'))" />
     <AvaloniaResource Include="Assets/cloudreve.png" />
     <AvaloniaResource Include="Assets/Fonts/Roboto.ttf" />
     <EmbeddedResource Include="Assets/English.json" LogicalName="Cloudreve.Desktop.English.json" />
+    <EmbeddedResource Include="Assets/Windows.*.json" WithCulture="false" LogicalName="Cloudreve.Desktop.%(Filename).json" />
     <None Update="Assets/Fonts/OFL.txt" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Assets/Cloudreve-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
     <InternalsVisibleTo Include="Cloudreve.Sync.Tests" />
@@ -19,9 +23,20 @@
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Remove="WorkspaceSettings.cs" />
     <Compile Include="../Cloudreve.Sync/MacFile.cs" Link="Sync/MacFile.cs" />
+    <Compile Remove="WorkspaceWindow.Sync.cs" />
+    <Compile Remove="WorkspaceWindow.Files.cs" />
+    <Compile Remove="WorkspaceWindow.Activity.cs" />
+    <Compile Remove="WorkspaceWindow.Conflicts.cs" />
+    <Compile Remove="PreferencesMenu.cs" />
   </ItemGroup>
+  <ItemGroup>
+    <AvaloniaXaml Remove="WorkspaceWindow.axaml" />
+  </ItemGroup>
+  <Target Name="BuildMacTray" BeforeTargets="PrepareForBuild" Inputs="Native/MacTray.m" Outputs="$(TrayLibrary)" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+    <MakeDir Directories="$(BaseIntermediateOutputPath)tray/$(Configuration)" />
+    <Exec Command="xcrun clang -dynamiclib -fobjc-arc -arch arm64 -arch x86_64 -mmacosx-version-min=11.0 -framework AppKit Native/MacTray.m -o &quot;$(TrayLibrary)&quot;" />
+  </Target>
   <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('OSX')) and '$(Configuration)' == 'Debug' and '$(RuntimeIdentifier)' == '' and '$(MacBundle)' != 'true'">
     <DebugBundleRoot>$(MSBuildProjectDirectory)/bin/Debug/$(TargetFramework)/Cloudreve.app</DebugBundleRoot>
     <OutputPath>$(DebugBundleRoot)/Contents/MacOS/</OutputPath>

@@ -2,7 +2,14 @@ namespace Cloudreve.Desktop;
 
 internal sealed record ActivityEntry(DateTime Time, string Operation, string Key, string Status);
 
-internal sealed record ActivityTransfer(long Id, string Phase, long Completed, long Total, bool Paused);
+internal sealed record ActivityTransfer(long Id, string Phase, long Completed, long Total, bool Paused)
+{
+    private readonly long started = System.Diagnostics.Stopwatch.GetTimestamp();
+    internal double BytesPerSecond
+    {
+        get { return Completed / Math.Max(0.001, System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalSeconds); }
+    }
+}
 
 internal sealed record ActivitySnapshot(long Revision, ActivityEntry? Current, ActivityEntry[] Recent, ActivityTransfer? Transfer);
 

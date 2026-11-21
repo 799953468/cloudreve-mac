@@ -78,12 +78,17 @@ internal sealed class PairWake
         return relativePath == null || !relativePath.Split(Path.DirectorySeparatorChar).Any(PairInventory.Reserved);
     }
 
-    internal async Task WatchRemoteAsync(DriveClient client, string root, CancellationToken cancel)
+    internal async Task WatchRemoteAsync(DriveClient client, string root, CancellationToken cancel, Action<bool>? connectionChanged = null)
     {
         try
         {
             await client.WatchAsync(root, message =>
             {
+                if (message is "disconnected" or "resumed" or "connected")
+                {
+                    connectionChanged?.Invoke(message != "disconnected");
+                }
+
                 if (message is "event" or "resumed")
                 {
                     Signal();
@@ -96,6 +101,7 @@ internal sealed class PairWake
         }
         catch (Exception ex)
         {
+            connectionChanged?.Invoke(false);
             Log.Logger.WriteFailure(LogEventLevel.Warning, "Watch remote folder pair", ex);
         }
     }

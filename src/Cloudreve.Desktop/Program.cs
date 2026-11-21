@@ -22,10 +22,9 @@ internal static class Program
             return 1;
         }
 
-        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        Log.Logger = DesktopLog.CreateLogger(Path.Combine(home, "Library", "Logs", "Cloudreve"), Preferences.LogLevel);
         Preferences.Load();
-        UiText.Language = Preferences.Current.Language;
+        Log.Logger = DesktopLog.CreateLogger(DesktopFiles.LogDirectory, Preferences.LogLevel, Preferences.Current.LogToFile, Preferences.Current.LogMaxFiles);
+        UiText.Language = UiText.Resolve(Preferences.Current.Language);
         try
         {
             Log.Information("Starting Cloudreve Desktop");
@@ -64,57 +63,33 @@ internal sealed class DesktopApp : Application
             }
 
             var host = new WorkspaceHost(new DriveProfiles(SessionFileStore.OpenDefault()), appIcon);
-            var window = host.OpenPrimary();
-            bool restored = false;
-            window.Opened += (_, _) =>
-            {
-                if (!restored)
-                {
-                    restored = true;
-                    host.RestoreOthers();
-                }
-            };
             if (TryGetFeature(typeof(IActivatableLifetime)) is IActivatableLifetime lifetime)
             {
-                lifetime.Activated += async (_, activation) =>
+                lifetime.Activated += (_, activation) =>
                 {
                     if (activation is ProtocolActivatedEventArgs protocol)
                     {
-                        await host.AcceptAsync(protocol.Uri);
+                        host.Accept(protocol.Uri);
                     }
                 };
             }
 
-            var menu = new NativeMenu();
-            var show = new NativeMenuItem(UiText.Get("打开工作区"));
-            var drives = new NativeMenuItem(UiText.Get("云盘")) { Menu = host.Drives };
-            var add = new NativeMenuItem(UiText.Get("添加云盘…"));
-            var refresh = new NativeMenuItem(UiText.Get("刷新目录"));
-            var quit = new NativeMenuItem(UiText.Get("退出 Cloudreve"));
-            show.Click += (_, _) => { host.ShowActive(); };
-            add.Click += (_, _) => { host.OpenNew(); };
-            refresh.Click += async (_, _) => { await host.RefreshActiveAsync(); };
-            quit.Click += (_, _) => { desktop.TryShutdown(); };
-            menu.Items.Add(show);
-            menu.Items.Add(drives);
-            menu.Items.Add(add);
-            menu.Items.Add(refresh);
-            menu.Items.Add(PreferencesMenu.Create(Program.Preferences, host.ReportFailure));
-            menu.Items.Add(new NativeMenuItemSeparator());
-            menu.Items.Add(quit);
-
-            var tray = new TrayIcon { Icon = appIcon, ToolTipText = "Cloudreve", Menu = menu, IsVisible = true };
-            TrayIcon.SetIcons(this, new TrayIcons { tray });
-            host.ActiveStatusChanged += (text, ready) =>
+            MacTray.Command trayAction = action => Dispatcher.UIThread.Post(() =>
             {
-                tray.ToolTipText = text;
-                refresh.IsEnabled = ready;
-            };
-            refresh.IsEnabled = false;
+                switch (action)
+                {
+                    case 0: host.OpenPopup(atTray: true); break;
+                    case 1: host.OpenAdd(); break;
+                    case 2: host.OpenSettings(); break;
+                    case 3: desktop.TryShutdown(); break;
+                }
+            });
+            bool en = UiText.Language == UiLanguage.English;
+            MacTray.Start(trayAction, en ? "Show" : "显示", en ? "Add new drive" : "添加新云盘", DesktopText.Get("settings.title"), en ? "Quit" : "退出");
             desktop.Exit += (_, _) =>
             {
-                host.Stop();
-                tray.Dispose();
+                MacTray.Stop();
+                GC.KeepAlive(trayAction);
             };
 
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -131,12 +106,12 @@ internal sealed class DesktopApp : Application
                 if (!stopping)
                 {
                     stopping = true;
-                    await host.PrepareToQuitAsync();
+                    await host.StopAsync();
                     readyToQuit = true;
                     Dispatcher.UIThread.Post(() => { desktop.TryShutdown(); });
                 }
             };
-            desktop.MainWindow = window;
+            Dispatcher.UIThread.Post(host.Start);
         }
 
         base.OnFrameworkInitializationCompleted();

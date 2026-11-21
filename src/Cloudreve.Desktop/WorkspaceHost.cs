@@ -1,148 +1,259 @@
 using Avalonia.Controls;
+using Avalonia.Controls.Notifications;
 using Serilog;
 using Serilog.Events;
 
 namespace Cloudreve.Desktop;
 
-internal sealed class WorkspaceHost(DriveProfiles profiles, WindowIcon icon)
+internal sealed class WorkspaceHost(DriveProfiles profiles, WindowIcon? icon = null, HttpMessageHandler? transport = null)
 {
-    private readonly List<WorkspaceWindow> windows = [];
-    private WorkspaceWindow? active;
+    private readonly List<MountedDrive> drives = [];
+    private readonly HttpClient api = new(transport ?? new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+    private readonly HttpClient storage = new(new HttpClientHandler { UseCookies = false });
     private bool stopping;
 
-    internal NativeMenu Drives { get; } = new();
-    internal event Action<string, bool>? ActiveStatusChanged;
-
-    internal WorkspaceWindow OpenPrimary()
+    internal IReadOnlyList<MountedDrive> Drives
     {
-        return Add(profiles.Primary);
+        get { return drives; }
     }
 
-    internal void RestoreOthers()
+    internal AddDriveWindow? Wizard { get; private set; }
+    internal SettingsWindow? Settings { get; private set; }
+    internal ActivityWindow? Popup { get; private set; }
+    internal event Action? Changed;
+
+    internal void Start()
     {
-        try
+        foreach (var store in profiles.OtherStores().Prepend(profiles.Primary))
         {
-            foreach (var store in profiles.OtherStores())
+            try
             {
-                var window = Add(store);
-                window.Show();
-                window.Hide();
+                if (store.Load() is { } account)
+                {
+                    Add(store, account);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+            {
+                Log.Logger.WriteFailure(LogEventLevel.Warning, "Restore drive", ex);
             }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+
+        if (drives.Count == 0)
         {
-            Log.Logger.WriteFailure(LogEventLevel.Warning, "Discover drive profiles", ex);
+            OpenAdd();
         }
-
-        active = windows[0];
-    }
-
-    internal void OpenNew()
-    {
-        if (!stopping)
+        else if (drives.FirstOrDefault(d => d.Pair == null) is { } legacy)
         {
-            Show(Add(profiles.Create()));
+            OpenAdd(legacy);
         }
     }
 
-    private WorkspaceWindow Add(SessionFileStore store)
+    private MountedDrive Add(SessionFileStore store, DriveSession account)
     {
-        var window = new WorkspaceWindow(store, profiles: profiles) { Icon = icon };
-        windows.Add(window);
-        active ??= window;
-        int ordinal = windows.Count;
-        var entry = new NativeMenuItem($"{ordinal}. {window.ProfileLabel}");
-        entry.Click += (_, _) => { Show(window); };
-        Drives.Items.Add(entry);
-        window.StatusChanged += (text, ready) =>
+        var drive = new MountedDrive(profiles, store, api, storage);
+        drive.Notice += text =>
         {
-            entry.Header = $"{ordinal}. {window.ProfileLabel}";
-            if (active == window)
+            Window? visible = Settings?.IsVisible == true ? Settings : Popup?.IsVisible == true ? Popup : null;
+            if (visible != null)
             {
-                ActiveStatusChanged?.Invoke(text, ready);
+                new WindowNotificationManager(visible) { MaxItems = 1 }.Show(new Notification(account.Name, text));
             }
         };
-        window.Activated += (_, _) =>
-        {
-            active = window;
-            ActiveStatusChanged?.Invoke(window.StatusText.Text ?? "Cloudreve", window.RefreshButton.IsEnabled);
-        };
-        window.Closing += (_, args) =>
-        {
-            if (!stopping && args.CloseReason == WindowCloseReason.WindowClosing)
-            {
-                args.Cancel = true;
-                window.Hide();
-            }
-        };
-        return window;
+        drive.Bind(account);
+        drives.Add(drive);
+        return drive;
     }
 
-    private void Show(WorkspaceWindow window)
-    {
-        if (!stopping)
-        {
-            active = window;
-            window.Show();
-            window.Activate();
-        }
-    }
-
-    internal void ShowActive()
-    {
-        if (active != null)
-        {
-            Show(active);
-        }
-    }
-
-    internal async Task RefreshActiveAsync()
-    {
-        if (!stopping && active != null)
-        {
-            await active.RefreshAsync();
-        }
-    }
-
-    internal void ReportFailure(string message)
-    {
-        ShowActive();
-        if (active != null)
-        {
-            active.StatusText.Text = message;
-        }
-    }
-
-    internal async Task AcceptAsync(Uri uri)
+    internal void OpenAdd(MountedDrive? existing = null)
     {
         if (stopping)
         {
             return;
         }
 
-        var owner = windows.FirstOrDefault(window => window.OwnsCallback(uri));
-        if (owner == null)
+        if (Wizard == null)
         {
-            ShowActive();
-            active?.ReportUnmatchedCallback();
+            Wizard = new AddDriveWindow(this, api, existing) { Icon = icon };
+            Wizard.Closed += (_, _) => { Wizard = null; };
+        }
+
+        Show(Wizard);
+    }
+
+    internal void OpenSettings()
+    {
+        if (stopping)
+        {
             return;
         }
 
-        Show(owner);
-        await owner.AcceptCallbackAsync(uri);
+        if (Settings == null)
+        {
+            Settings = new SettingsWindow(this) { Icon = icon };
+            Settings.Closed += (_, _) => { Settings = null; };
+        }
+
+        Show(Settings);
     }
 
-    internal async Task PrepareToQuitAsync()
+    internal void OpenPopup(bool atTray = false)
+    {
+        if (stopping)
+        {
+            return;
+        }
+
+        if (Popup == null)
+        {
+            Popup = new ActivityWindow(this) { Icon = icon };
+            Popup.Closed += (_, _) => { Popup = null; };
+        }
+
+        Show(Popup);
+        if (atTray && Popup.TryGetPlatformHandle() is { HandleDescriptor: "NSWindow" or "NSView" } handle)
+        {
+            MacTray.Position(handle.Handle);
+        }
+    }
+
+    private static void Show(Window window)
+    {
+        window.Show();
+        if (window.WindowState == WindowState.Minimized)
+        {
+            window.WindowState = WindowState.Normal;
+        }
+
+        window.Activate();
+    }
+
+    internal DriveClient VerifyClient(DriveSession account, Action<DriveSession> refreshed)
+    {
+        return new DriveClient(api, storage, account, refreshed);
+    }
+
+    internal async Task InstallAsync(DriveSession account, string? local, MountedDrive? existing, CancellationToken cancel)
+    {
+        var store = existing?.Store ?? (drives.All(d => d.Store != profiles.Primary) ? profiles.Primary : profiles.Create());
+        var pairStore = new FolderPairStore(Path.Combine(store.DirectoryPath, "folder-pairs"), account);
+        FolderPair? created = null;
+        if (existing?.Pair == null)
+        {
+            CheckEmpty(local!);
+            var client = VerifyClient(account, updated => { account = updated; });
+            string id = await client.FolderIdAsync(account.Root, cancel);
+            cancel.ThrowIfCancellationRequested();
+            CheckEmpty(local!);
+            profiles.Reserve(store, local!);
+            try
+            {
+                created = pairStore.Create(local!, account.Root, id);
+            }
+            catch
+            {
+                profiles.Release(store);
+                throw;
+            }
+        }
+
+        try
+        {
+            if (existing != null)
+            {
+                await existing.StopAsync();
+            }
+
+            cancel.ThrowIfCancellationRequested();
+            store.Save(account);
+        }
+        catch
+        {
+            if (created != null)
+            {
+                pairStore.Disconnect(created);
+                profiles.Release(store);
+            }
+
+            if (existing != null && !stopping)
+            {
+                existing.Bind(existing.Account);
+            }
+
+            throw;
+        }
+
+        if (existing == null)
+        {
+            Add(store, account);
+        }
+        else
+        {
+            existing.Bind(account);
+        }
+
+        Changed?.Invoke();
+    }
+
+    internal static void CheckEmpty(string local)
+    {
+        if (!Path.IsPathFullyQualified(local))
+        {
+            throw new IOException(UiText.Get("请选择本机文件夹。"));
+        }
+
+        FolderPairStore.CheckDirectory(Cloudreve.Sync.MacFile.NormalizeSystemPath(local));
+        if (Directory.EnumerateFileSystemEntries(local).Any())
+        {
+            throw new IOException(DesktopText.Get("addDrive.folderNotEmpty"));
+        }
+    }
+
+    internal async Task RemoveAsync(MountedDrive drive)
+    {
+        if (Wizard?.Existing == drive)
+        {
+            Wizard.Close();
+        }
+
+        await drive.StopAsync();
+        try
+        {
+            if (drive.Pair != null)
+            {
+                drive.PairStore.Disconnect(drive.Pair);
+            }
+
+            drive.Store.Forget();
+        }
+        catch
+        {
+            drive.Bind(drive.Account);
+            throw;
+        }
+
+        drives.Remove(drive);
+        Changed?.Invoke();
+        if (drives.Count == 0)
+        {
+            OpenAdd();
+        }
+    }
+
+    internal void Accept(Uri callback)
+    {
+        if (!stopping && Wizard != null && Wizard.Accept(callback))
+        {
+            Show(Wizard);
+        }
+    }
+
+    internal async Task StopAsync()
     {
         stopping = true;
-        await Task.WhenAll(windows.Select(window => window.PrepareToQuitAsync()));
-    }
-
-    internal void Stop()
-    {
-        foreach (var window in windows)
-        {
-            window.Stop();
-        }
+        Wizard?.Close();
+        await Task.WhenAll(drives.Select(drive => drive.StopAsync()));
+        api.Dispose();
+        storage.Dispose();
     }
 }

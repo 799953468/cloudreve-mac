@@ -1,0 +1,16 @@
+<Window xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:d="using:Cloudreve.Desktop"
+    x:Class="Cloudreve.Desktop.ActivityWindow" x:ClassModifier="internal" Width="370" Height="530" Title="Cloudreve"
+    WindowDecorations="None" ShowInTaskbar="False" CanResize="False" WindowStartupLocation="CenterScreen" Background="{DynamicResource Paper}" Foreground="{DynamicResource Ink}">
+  <Window.Styles><StyleInclude Source="/Styles/DesktopControls.axaml" /></Window.Styles>
+  <Grid RowDefinitions="Auto,*,Auto">
+    <Border Background="{DynamicResource HeaderFill}" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource Divider}" Padding="16,12,16,8">
+      <StackPanel Spacing="12"><Grid ColumnDefinitions="*,Auto"><d:BrandMark Height="28" /><Button x:Name="SettingsButton" Grid.Column="1" Classes="tool icon" Width="30" Height="30" ToolTip.Tip="{d:DesktopText settings.title}" AutomationProperties.Name="{d:DesktopText settings.title}"><PathIcon Width="18" Height="18" Data="{StaticResource GearIcon}" /></Button></Grid>
+        <ScrollViewer HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"><StackPanel x:Name="Chips" Orientation="Horizontal" Spacing="4" /></ScrollViewer>
+      </StackPanel>
+    </Border>
+    <Grid Grid.Row="1"><ScrollViewer x:Name="TaskScroll"><StackPanel x:Name="Tasks" /></ScrollViewer>
+      <StackPanel x:Name="Empty" VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="8"><PathIcon Width="48" Height="48" Data="{StaticResource FolderIcon}" Foreground="{DynamicResource DisabledInk}" /><TextBlock Classes="secondary" Text="{d:DesktopText popup.noActivity}" TextAlignment="Center" /></StackPanel>
+    </Grid>
+    <Border Grid.Row="2" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource Divider}" Padding="16,8"><StackPanel Orientation="Horizontal" Spacing="10"><PathIcon x:Name="StatusIcon" Width="16" Height="16" /><TextBlock x:Name="Footer" Classes="secondary" FontSize="13" /></StackPanel></Border>
+  </Grid>
+</Window>

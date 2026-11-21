@@ -6,7 +6,14 @@ using Serilog.Events;
 
 namespace Cloudreve.Desktop;
 
-internal sealed record DisplayPreferences(LogEventLevel LogLevel = LogEventLevel.Information, bool ConflictAlerts = true, UiLanguage Language = UiLanguage.Chinese);
+internal sealed record DisplayPreferences(
+    LogEventLevel LogLevel = LogEventLevel.Information,
+    bool ConflictAlerts = true,
+    UiLanguage Language = UiLanguage.Chinese,
+    bool FastPopup = true,
+    bool CredentialAlerts = true,
+    bool LogToFile = true,
+    int LogMaxFiles = 7);
 
 internal sealed class DesktopPreferences(string directory)
 {
@@ -30,7 +37,7 @@ internal sealed class DesktopPreferences(string directory)
             }
 
             var value = JsonSerializer.Deserialize<DisplayPreferences>(File.ReadAllText(path));
-            if (value != null && Enum.IsDefined(value.LogLevel) && Enum.IsDefined(value.Language))
+            if (value != null && Enum.IsDefined(value.LogLevel) && Enum.IsDefined(value.Language) && value.LogMaxFiles is 3 or 5 or 7 or 10)
             {
                 Apply(value);
             }
@@ -43,7 +50,7 @@ internal sealed class DesktopPreferences(string directory)
 
     internal void Save(DisplayPreferences value)
     {
-        if (!Enum.IsDefined(value.LogLevel) || !Enum.IsDefined(value.Language))
+        if (!Enum.IsDefined(value.LogLevel) || !Enum.IsDefined(value.Language) || value.LogMaxFiles is not (3 or 5 or 7 or 10))
         {
             throw new ArgumentOutOfRangeException(nameof(value));
         }
