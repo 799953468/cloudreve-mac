@@ -4,7 +4,7 @@
 
 Cloudreve Mac is an unofficial macOS sync client for [Cloudreve](https://github.com/cloudreve/Cloudreve). Pair a folder on your Cloudreve site with a folder on your Mac, then work with your files in Finder. Synced files are stored locally and open offline. No WebDAV connection or mounted network drive is required.
 
-[Installation](#installation) | [Connect a drive](#connect-a-drive) | [Sync behavior](#sync-behavior) | [Report an issue](https://github.com/799953468/cloudreve-mac/issues)
+[Installation](#installation) | [Connect a drive](#connect-a-drive) | [Sync behavior](#sync-behavior) | [Report an issue](https://github.com/799953468/cloudreve-mac/issues/new/choose)
 
 ## Features
 
@@ -72,7 +72,7 @@ Local scans, remote scans, and transfers each start with two concurrent operatio
 
 ## Contributing
 
-For a sync bug, [open an issue](https://github.com/799953468/cloudreve-mac/issues) with your macOS and Cloudreve versions, which side changed first, and what you expected to happen. Use sample filenames and omit credentials.
+For a sync bug, [file a bug report](https://github.com/799953468/cloudreve-mac/issues/new?template=bug_report.yml) with your macOS and Cloudreve versions, which side changed first, and what you expected to happen. Use sample filenames and omit credentials.
 
 The [desktop app](src/Cloudreve.Desktop) is written in C# with Avalonia. [Cloudreve.Sync](src/Cloudreve.Sync) is a separate local-directory tool; the desktop app does not invoke it. Run the [test suite](tests/Cloudreve.Sync.Tests) from the repository root:
 

@@ -100,8 +100,9 @@
     }
   },
   "about": {
-    "homepage": "主页",
+    "homepage": "项目主页（GitHub）",
     "preview": "预览版",
+    "releases": "发布版本",
     "reportIssue": "报告问题"
   },
   "timeAgo": {

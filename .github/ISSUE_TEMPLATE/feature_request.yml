@@ -1,0 +1,23 @@
+name: Feature request / 功能建议
+description: Suggest an improvement to the macOS client. / 建议改进 macOS 客户端。
+title: "[Feature] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do? / 你想完成什么？
+      description: Describe a task that is difficult or impossible in the current client. / 请描述目前客户端难以完成或不支持的操作。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change / 改进建议
+      description: What would you like the client to do in that situation? / 在上述场景中，你希望客户端如何工作？
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or workarounds (optional) / 替代方案或临时办法（选填）

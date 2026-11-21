@@ -100,8 +100,9 @@
     }
   },
   "about": {
-    "homepage": "Homepage",
+    "homepage": "Project Home (GitHub)",
     "preview": "Preview",
+    "releases": "Releases",
     "reportIssue": "Report Issue"
   },
   "timeAgo": {

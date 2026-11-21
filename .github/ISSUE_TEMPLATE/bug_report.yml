@@ -1,0 +1,50 @@
+name: Bug report / 故障报告
+description: Report a problem with the macOS client. / 反馈 macOS 客户端异常。
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use sample filenames. Never share tokens, `drives.json`, the `folder-pairs` cache, or unredacted logs.
+        请使用示例文件名，不要公开令牌、`drives.json`、`folder-pairs` 缓存或未经脱敏的日志。
+  - type: input
+    id: client-version
+    attributes:
+      label: Cloudreve Mac version / 客户端版本
+      description: See Settings → About, or give the commit if built from source. / 见「设置 → 关于」；从源码构建可填写提交号。
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and chip / macOS 版本及芯片
+      placeholder: macOS 15.6, Apple M2
+    validations:
+      required: true
+  - type: input
+    id: server-version
+    attributes:
+      label: Cloudreve server version (if known) / Cloudreve 服务端版本（如已知）
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / 复现步骤
+      description: For sync issues, say whether the first change was in Finder or on the Cloudreve site. / 若是同步问题，请说明文件最先在 Finder 还是网页端发生变化。
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior / 预期与实际结果
+      placeholder: |
+        Expected / 预期：
+        Actual / 实际：
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log excerpt (optional) / 相关日志片段（选填）
+      description: 'If file logging is enabled, copy only the relevant, redacted lines from `~/Library/Logs/Cloudreve/desktop-*.log`. / 如已启用文件日志，仅粘贴该路径下与问题有关且已脱敏的几行。'
+      render: text

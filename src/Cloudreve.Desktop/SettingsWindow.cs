@@ -37,11 +37,14 @@ internal sealed partial class SettingsWindow : Window
         };
         var version = typeof(SettingsWindow).Assembly.GetName().Version!;
         VersionLabel.Text = $"v{version.ToString(3)}" + (version.Major == 0 ? "   " + DesktopText.Get("about.preview") : "");
-        foreach (var (label, url) in new[]
-                 {
-                     (DesktopText.Get("about.homepage"), "https://cloudreve.org"), ("GitHub", "https://github.com/cloudreve/desktop"),
-                     (DesktopText.Get("about.reportIssue"), "https://github.com/cloudreve/desktop/issues"), ("Discord", "https://discord.com/invite/WTpMFpZT76")
-                 })
+        const string repositoryUrl = "https://github.com/799953468/cloudreve-mac";
+        var aboutLinks = new[]
+        {
+            (DesktopText.Get("about.homepage"), repositoryUrl),
+            (DesktopText.Get("about.releases"), repositoryUrl + "/releases"),
+            (DesktopText.Get("about.reportIssue"), repositoryUrl + "/issues/new/choose")
+        };
+        foreach (var (label, url) in aboutLinks)
         {
             AboutPage.Children.Add(ActionButton(label, async () => { await Launcher.LaunchUriAsync(new Uri(url)); }));
         }
