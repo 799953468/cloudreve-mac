@@ -1,6 +1,7 @@
 namespace Cloudreve.Desktop;
 
-internal sealed record FileBaseline(string LocalHash, string RemoteVersion, string? LocalId = null, string? RemoteId = null, bool IsDirectory = false);
+internal sealed record FileBaseline(string LocalHash, string RemoteVersion, string? LocalId = null, string? RemoteId = null, bool IsDirectory = false,
+    uint LocalGeneration = 0);
 
 internal enum SyncAction
 {

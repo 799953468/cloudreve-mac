@@ -52,6 +52,42 @@ internal static partial class MacFile
         public ulong FileId;
     }
 
+    internal readonly record struct ContentVersion(string LocalId, uint Generation);
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    private struct ContentVersionBuffer
+    {
+        public uint Length, ReturnedCommon, ReturnedVolume, ReturnedDirectory, ReturnedFile, ReturnedFork;
+        public uint VolumeLow, VolumeHigh;
+        public long CreatedSeconds, CreatedNanoseconds;
+        public uint Generation;
+        public ulong FileId;
+    }
+
+    [LibraryImport("libSystem.B.dylib", EntryPoint = "getattrlist", StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int ReadContentVersion(string path, ref AttributeList attributes, out ContentVersionBuffer result, nuint size, nuint options);
+
+    internal static ContentVersion? GetContentVersion(string path)
+    {
+        // Request FSID, CRTIME, GEN_COUNT and FILEID together; a generation is meaningful only for the same object.
+        const uint common = 0x80000000 | 0x00000004 | 0x00000200 | 0x00080000 | 0x02000000;
+        const uint options = 0x01 | 0x20; // FSOPT_NOFOLLOW | FSOPT_ATTR_CMN_EXTENDED
+        var attributes = new AttributeList { Count = 5, Common = common };
+        nuint size = (nuint)Marshal.SizeOf<ContentVersionBuffer>();
+        if (ReadContentVersion(path, ref attributes, out var result, size, options) != 0 || result.Length != size ||
+            result.ReturnedCommon != common || result.FileId == 0 || result.Generation == 0)
+        {
+            return null;
+        }
+
+        return new ContentVersion(FormatIdentity(result.VolumeHigh, result.VolumeLow, result.FileId, result.CreatedSeconds, result.CreatedNanoseconds), result.Generation);
+    }
+
+    private static string FormatIdentity(uint volumeHigh, uint volumeLow, ulong fileId, long createdSeconds, long createdNanoseconds)
+    {
+        return $"{volumeHigh:X8}{volumeLow:X8}:{fileId:X16}:{createdSeconds:X16}:{createdNanoseconds:X8}";
+    }
+
     [LibraryImport("libSystem.B.dylib", EntryPoint = "getattrlist", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
     private static partial int ReadIdentity(string path, ref AttributeList attributes, out IdentityBuffer result, nuint size, nuint options);
 
@@ -64,7 +100,7 @@ internal static partial class MacFile
             return null;
         }
 
-        return $"{result.VolumeHigh:X8}{result.VolumeLow:X8}:{result.FileId:X16}:{result.CreatedSeconds:X16}:{result.CreatedNanoseconds:X8}";
+        return FormatIdentity(result.VolumeHigh, result.VolumeLow, result.FileId, result.CreatedSeconds, result.CreatedNanoseconds);
     }
 
     [LibraryImport("libSystem.B.dylib", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]

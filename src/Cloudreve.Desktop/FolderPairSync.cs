@@ -15,6 +15,8 @@ internal sealed record PairSyncResult(int Uploaded, int Downloaded, int Removed,
 
 internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair pair, DriveClient drive, SyncActivity? activity = null)
 {
+    private readonly AdaptiveTransfers transfers = new();
+
     internal async Task<PairSyncResult> RunAsync(CancellationToken cancel)
     {
         using (store.Lock(pair))
@@ -27,7 +29,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
             }
 
             var rules = new PairIgnoreRules(store.ReadRules(pair));
-            var local = await PairInventory.ReadLocalAsync(pair, rules, cancel);
+            var local = await PairInventory.ReadLocalAsync(pair, rules, baseline, cancel);
             await VerifyRemoteRootAsync(cancel);
             var remote = await PairInventory.ReadRemoteAsync(pair.Remote, "", drive, rules, cancel);
             await VerifyRemoteRootAsync(cancel);
@@ -39,6 +41,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
             var blocked = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var directoryTrash = new List<PairNode>();
             var trashedDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var pending = new List<FileTransfer>();
             int uploaded = 0, downloaded = 0, removed = 0;
             bool dirty = false;
             try
@@ -89,9 +92,9 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                     var action = SyncDecision.ForFile(previous, hash, file?.Version);
                     if (action == SyncAction.Unchanged)
                     {
-                        if (previous!.LocalId != here!.LocalId || previous.RemoteId != file!.Id)
+                        if (previous!.LocalId != here!.LocalId || previous.LocalGeneration != here.LocalGeneration || previous.RemoteId != file!.Id)
                         {
-                            baseline[key] = previous with { LocalId = here.LocalId, RemoteId = file!.Id };
+                            baseline[key] = previous with { LocalId = here.LocalId, LocalGeneration = here.LocalGeneration, RemoteId = file!.Id };
                             dirty = true;
                         }
 
@@ -99,7 +102,6 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                     }
 
                     FolderPairStore.Verify(pair);
-                    string path = Path.Combine(pair.Local, key);
                     switch (action)
                     {
                         case SyncAction.Forget:
@@ -130,43 +132,36 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                             dirty |= baseline.Remove(key);
                             continue;
                         case SyncAction.Upload:
-                            activity?.Start(UiText.Get("上传"), key);
-                            string target = await ResolveRemoteAsync(key, file, true, cancel);
-                            await RequireLocalAsync(key, hash, cancel);
-                            await drive.UploadAsync(path, target, file, cancel, activity);
-                            // Upload completion does not identify the stored entity. Read it back before checkpointing.
-                            file = await PairInventory.ReadVersionAsync(drive, target, cancel);
-                            if (await ReceiveAsync(key, file, hash, false, cancel) != hash)
-                            {
-                                throw new IOException(UiText.Get("云端回读与上传前的文件内容不同，未记录为已同步。"));
-                            }
-
-                            uploaded++;
-                            break;
                         case SyncAction.Download:
-                            activity?.Start(UiText.Get("下载"), key);
-                            hash = await ReceiveAsync(key, file!, hash, true, cancel);
-                            downloaded++;
-                            break;
                         case SyncAction.CompareContents:
-                            activity?.Start(UiText.Get("核对内容"), key);
-                            if (await ReceiveAsync(key, file!, hash, false, cancel) != hash)
-                            {
-                                conflicts.Add(key);
-                                activity?.Finish(UiText.Get("冲突"));
-                                choices.Add(new FileConflict(pair.Marker, key, hash, file));
-                                continue;
-                            }
-
+                            pending.Add(new FileTransfer(key, action, here, file));
                             break;
                         default:
                             throw new InvalidOperationException(UiText.Get("未知的同步操作。"));
                     }
-
-                    baseline[key] = new FileBaseline(hash!, file!.Version!, MacFile.Identity(path), file.Id);
-                    dirty = true;
-                    activity?.Finish(UiText.Get("完成"));
                 }
+
+                await transfers.RunAsync(pending, TransferFileAsync, completed =>
+                {
+                    var item = completed.Item;
+                    if (completed.Baseline == null)
+                    {
+                        conflicts.Add(item.Key);
+                        choices.Add(new FileConflict(pair.Marker, item.Key, item.Local?.Hash, item.Remote));
+                        return;
+                    }
+
+                    baseline[item.Key] = completed.Baseline;
+                    dirty = true;
+                    if (item.Action == SyncAction.Upload)
+                    {
+                        uploaded++;
+                    }
+                    else if (item.Action == SyncAction.Download)
+                    {
+                        downloaded++;
+                    }
+                }, cancel);
 
                 // These trees were blocked during the file pass. Trash only after rechecking their contents.
                 foreach (var directory in directoryTrash)
@@ -276,7 +271,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                 await RequireLocalAsync(key, hash, cancel);
                 await drive.UploadAsync(path, target, file, cancel);
                 file = await PairInventory.ReadVersionAsync(drive, target, cancel);
-                if (await ReceiveAsync(key, file, hash, false, cancel) != hash)
+                if (await CompareRemoteHashAsync(key, file, hash, activity, cancel) != hash)
                 {
                     throw new IOException(UiText.Get("上传回读与本地内容不一致，未记录为已解决。"));
                 }
@@ -290,8 +285,8 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
             }
             else if (file != null)
             {
-                string received = await ReceiveAsync(key, file, hash, true, cancel);
-                baseline[key] = new FileBaseline(received, file.Version!, MacFile.Identity(path), file.Id);
+                var received = await InstallDownloadAsync(key, file, hash, activity, cancel);
+                baseline[key] = new FileBaseline(received.Hash!, file.Version!, received.LocalId, file.Id, LocalGeneration: received.LocalGeneration);
             }
             else if (hash != null)
             {
@@ -321,7 +316,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
     }
 
     // Resolve each segment from its parent. Missing intermediate directories can be created for an upload only.
-    private async Task<string> ResolveRemoteAsync(string key, DriveEntry? expected, bool createParents, CancellationToken cancel)
+    private async Task<string> ResolveRemoteAsync(string key, DriveEntry? expected, bool createParents, CancellationToken cancel, bool requireParents = false)
     {
         string parent = pair.Remote;
         string[] parts = key.Split('/');
@@ -363,7 +358,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
             {
                 if (!createParents)
                 {
-                    if (expected != null)
+                    if (expected != null || requireParents)
                     {
                         throw new IOException(UiText.Get("云端父目录在同步期间已变化。"));
                     }
@@ -443,7 +438,16 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
         File.Move(Path.Combine(pair.Local, key), RecoveryPath(key));
     }
 
-    private async Task<string> ReceiveAsync(string key, DriveEntry file, string? expectedHash, bool install, CancellationToken cancel)
+    private async Task<string> CompareRemoteHashAsync(string key, DriveEntry file, string? expectedHash, SyncActivity? progress, CancellationToken cancel)
+    {
+        await RequireLocalAsync(key, expectedHash, cancel);
+        string hash = await drive.HashDownloadAsync(file, cancel, progress);
+        await VerifyVersionAsync(file, cancel);
+        await RequireLocalAsync(key, expectedHash, cancel);
+        return hash;
+    }
+
+    private async Task<PairNode> InstallDownloadAsync(string key, DriveEntry file, string? expectedHash, SyncActivity? progress, CancellationToken cancel)
     {
         string parent = Path.GetDirectoryName(key) ?? "";
         await RequireLocalAsync(key, expectedHash, cancel);
@@ -452,23 +456,21 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
         string temp = Path.Combine(Path.GetDirectoryName(path)!, $".cloudreve-{Guid.NewGuid():N}.part");
         try
         {
-            await drive.DownloadAsync(file, temp, cancel, activity);
-            string hash = await PairInventory.HashAsync(temp, cancel);
+            await drive.DownloadAsync(file, temp, cancel, progress);
+            var received = await PairInventory.ReadLocalFileAsync(key, temp, null, cancel);
             await VerifyVersionAsync(file, cancel);
             await RequireLocalAsync(key, expectedHash, cancel);
-            if (install)
+            if (expectedHash != null)
             {
-                if (expectedHash != null)
-                {
-                    File.Replace(temp, path, RecoveryPath(key));
-                }
-                else
-                {
-                    File.Move(temp, path, false);
-                }
+                File.Replace(temp, path, RecoveryPath(key));
+            }
+            else
+            {
+                File.Move(temp, path, false);
             }
 
-            return hash;
+            string? installedId = MacFile.Identity(path);
+            return installedId == received.LocalId ? received : received with { LocalId = installedId, LocalGeneration = 0 };
         }
         finally
         {

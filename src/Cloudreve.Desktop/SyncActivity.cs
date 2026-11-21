@@ -11,98 +11,120 @@ internal sealed record ActivityTransfer(long Id, string Phase, long Completed, l
     }
 }
 
-internal sealed record ActivitySnapshot(long Revision, ActivityEntry? Current, ActivityEntry[] Recent, ActivityTransfer? Transfer);
+internal sealed record ActiveFile(ActivityEntry Entry, ActivityTransfer? Transfer);
+internal sealed record ActivitySnapshot(long Revision, ActiveFile[] Active, ActivityEntry[] Recent);
 
 internal sealed class SyncActivity
 {
     internal const int Capacity = 100;
-    private readonly object gate = new();
-    private readonly Queue<ActivityEntry> recent = new();
+    private sealed class SharedState
+    {
+        internal readonly HashSet<SyncActivity> Active = [];
+        internal readonly Queue<ActivityEntry> Recent = new();
+        internal long Revision;
+    }
+
+    private readonly SharedState state;
     private ActivityEntry? current;
     private ActivityTransfer? transfer;
     private TaskCompletionSource? resume;
-    private long revision;
+    internal SyncActivity() : this(new SharedState())
+    {
+    }
+
+    private SyncActivity(SharedState state)
+    {
+        this.state = state;
+    }
+
+    internal SyncActivity CreateWorker()
+    {
+        return new SyncActivity(state);
+    }
 
     internal void Start(string operation, string key)
     {
-        lock (gate)
+        lock (state)
         {
             current = new ActivityEntry(DateTime.Now, operation, key, UiText.Get("处理中"));
-            revision++;
+            state.Active.Add(this);
+            state.Revision++;
         }
     }
 
     internal void Finish(string status)
     {
-        lock (gate)
+        lock (state)
         {
             if (current == null)
             {
                 return;
             }
 
-            if (recent.Count == Capacity)
+            if (state.Recent.Count == Capacity)
             {
-                recent.Dequeue();
+                state.Recent.Dequeue();
             }
 
-            recent.Enqueue(current with { Time = DateTime.Now, Status = status });
+            state.Recent.Enqueue(current with { Time = DateTime.Now, Status = status });
             EndTransfer();
             current = null;
-            revision++;
+            state.Active.Remove(this);
+            state.Revision++;
         }
     }
 
     internal void BeginTransfer(string phase, long total)
     {
-        lock (gate)
+        lock (state)
         {
             EndTransfer();
-            transfer = new ActivityTransfer(++revision, phase, 0, total, false);
+            transfer = new ActivityTransfer(++state.Revision, phase, 0, total, false);
         }
     }
 
     internal void EndTransfer()
     {
-        lock (gate)
+        lock (state)
         {
             if (transfer != null)
             {
                 transfer = null;
                 resume?.TrySetResult();
                 resume = null;
-                revision++;
+                state.Revision++;
             }
         }
     }
 
     internal void SetPaused(long id, bool paused)
     {
-        lock (gate)
+        lock (state)
         {
-            if (transfer == null || transfer.Id != id || transfer.Paused == paused)
+            var worker = state.Active.FirstOrDefault(item => item.transfer?.Id == id);
+            if (worker?.transfer == null || worker.transfer.Paused == paused)
             {
                 return;
             }
 
             if (paused)
             {
-                resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                worker.resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             }
             else
             {
-                resume?.TrySetResult();
-                resume = null;
+                worker.resume?.TrySetResult();
+                worker.resume = null;
             }
 
-            transfer = transfer with { Paused = paused };
-            revision++;
+            worker.transfer = worker.transfer with { Paused = paused };
+            state.Revision++;
         }
     }
 
     internal Task WaitForResumeAsync(CancellationToken cancel)
     {
-        lock (gate)
+        lock (state)
         {
             cancel.ThrowIfCancellationRequested();
             return resume?.Task.WaitAsync(cancel) ?? Task.CompletedTask;
@@ -111,26 +133,27 @@ internal sealed class SyncActivity
 
     internal void ReportBytes(long position)
     {
-        lock (gate)
+        lock (state)
         {
             if (transfer != null && position > transfer.Completed)
             {
                 transfer = transfer with { Completed = Math.Min(position, transfer.Total) };
-                revision++;
+                state.Revision++;
             }
         }
     }
 
     internal ActivitySnapshot? ChangesSince(long knownRevision)
     {
-        lock (gate)
+        lock (state)
         {
-            if (knownRevision == revision)
+            if (knownRevision == state.Revision)
             {
                 return null;
             }
 
-            return new ActivitySnapshot(revision, current, recent.Reverse().ToArray(), transfer);
+            var active = state.Active.Select(worker => new ActiveFile(worker.current!, worker.transfer)).ToArray();
+            return new ActivitySnapshot(state.Revision, active, state.Recent.Reverse().ToArray());
         }
     }
 }

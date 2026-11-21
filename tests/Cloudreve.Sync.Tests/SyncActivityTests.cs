@@ -16,7 +16,7 @@ public sealed class SyncActivityTests
             var activity = new SyncActivity();
             activity.Start("上传", "file");
             activity.BeginTransfer("上传", 4);
-            long id = activity.ChangesSince(-1)!.Transfer!.Id;
+            long id = Assert.Single(activity.ChangesSince(-1)!.Active).Transfer!.Id;
             activity.SetPaused(id, true);
             using (var input = File.OpenRead(path))
             using (var slice = new FileSliceContent(input.SafeFileHandle, 1, 3, activity: activity))
@@ -28,14 +28,14 @@ public sealed class SyncActivityTests
                 activity.SetPaused(id, false);
                 await copying.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
                 Assert.Equal(new byte[] { 1, 2, 3 }, output.ToArray());
-                Assert.Equal(4, activity.ChangesSince(-1)!.Transfer!.Completed);
+                Assert.Equal(4, Assert.Single(activity.ChangesSince(-1)!.Active).Transfer!.Completed);
                 activity.ReportBytes(2);
-                Assert.Equal(4, activity.ChangesSince(-1)!.Transfer!.Completed);
+                Assert.Equal(4, Assert.Single(activity.ChangesSince(-1)!.Active).Transfer!.Completed);
             }
 
             activity.BeginTransfer("读取云端内容", 4);
             activity.SetPaused(id, true);
-            Assert.False(activity.ChangesSince(-1)!.Transfer!.Paused);
+            Assert.False(Assert.Single(activity.ChangesSince(-1)!.Active).Transfer!.Paused);
         }
         finally
         {
@@ -49,7 +49,7 @@ public sealed class SyncActivityTests
         var activity = new SyncActivity();
         activity.Start("下载", "doc");
         activity.BeginTransfer("下载", 10);
-        activity.SetPaused(activity.ChangesSince(-1)!.Transfer!.Id, true);
+        activity.SetPaused(Assert.Single(activity.ChangesSince(-1)!.Active).Transfer!.Id, true);
         using (var cancel = new CancellationTokenSource())
         {
             var waiting = activity.WaitForResumeAsync(cancel.Token);
@@ -58,7 +58,33 @@ public sealed class SyncActivityTests
         }
 
         activity.Finish("已取消");
-        Assert.Null(activity.ChangesSince(-1)!.Transfer);
+        Assert.Empty(activity.ChangesSince(-1)!.Active);
+    }
+
+    [Fact]
+    public async Task PausingOneFileDoesNotPauseOrResetItsPeer()
+    {
+        var activity = new SyncActivity();
+        var first = activity.CreateWorker();
+        var second = activity.CreateWorker();
+        first.Start("下载", "one");
+        second.Start("上传", "two");
+        first.BeginTransfer("下载", 50);
+        second.BeginTransfer("上传", 100);
+        var id = activity.ChangesSince(-1)!.Active.Single(file => file.Entry.Key == "one").Transfer!.Id;
+        activity.SetPaused(id, true);
+        var cancel = TestContext.Current.CancellationToken;
+        var waiting = first.WaitForResumeAsync(cancel);
+        Assert.False(waiting.IsCompleted);
+        await second.WaitForResumeAsync(cancel);
+        second.ReportBytes(42);
+        Assert.Equal(42, activity.ChangesSince(-1)!.Active.Single(file => file.Entry.Key == "two").Transfer!.Completed);
+        second.Finish("完成");
+        Assert.False(waiting.IsCompleted);
+        activity.SetPaused(id, false);
+        await waiting.WaitAsync(TimeSpan.FromSeconds(5), cancel);
+        first.Finish("完成");
+        Assert.Empty(activity.ChangesSince(-1)!.Active);
     }
 
     [Fact]
@@ -73,13 +99,13 @@ public sealed class SyncActivityTests
 
         activity.Start("下载", "current");
         var snapshot = Assert.IsType<ActivitySnapshot>(activity.ChangesSince(-1));
-        Assert.Equal("current", snapshot.Current?.Key);
+        Assert.Equal("current", Assert.Single(snapshot.Active).Entry.Key);
         Assert.Equal(SyncActivity.Capacity, snapshot.Recent.Length);
         Assert.Equal("1", snapshot.Recent[^1].Key);
         Assert.Null(activity.ChangesSince(snapshot.Revision));
         activity.Finish("失败");
         var updated = Assert.IsType<ActivitySnapshot>(activity.ChangesSince(snapshot.Revision));
-        Assert.Null(updated.Current);
+        Assert.Empty(updated.Active);
         Assert.Equal("失败", updated.Recent[0].Status);
     }
 }

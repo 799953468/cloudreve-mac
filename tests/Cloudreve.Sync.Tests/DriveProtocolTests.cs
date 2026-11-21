@@ -201,6 +201,29 @@ public sealed class DriveProtocolTests
     }
 
     [Fact]
+    public async Task StreamsVerificationDigestAcrossChunksIncludingEmptyContent()
+    {
+        byte[] data = new byte[200_003];
+        new Random(41).NextBytes(data);
+        using (var api = new HttpClient(new Handler(_ => Task.FromResult(Json(new { code = 0, data = new { urls = new[] { new { url = "https://cdn.example/file" } } } })))))
+        using (var storage = new HttpClient(new Handler(request =>
+               {
+                   Assert.Null(request.Headers.Authorization);
+                   return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(data) });
+               })))
+        {
+            var drive = new DriveClient(api, storage, Session(), _ => { });
+            var cancel = TestContext.Current.CancellationToken;
+            var file = new DriveEntry("doc", "cloudreve://my/doc", false, data.Length);
+            Assert.Equal(Convert.ToHexString(SHA256.HashData(data)), await drive.HashDownloadAsync(file, cancel));
+            await Assert.ThrowsAsync<InvalidDataException>(() => drive.HashDownloadAsync(file with { Size = data.Length - 1 }, cancel));
+            await Assert.ThrowsAsync<InvalidDataException>(() => drive.HashDownloadAsync(file with { Size = data.Length + 1 }, cancel));
+            data = [];
+            Assert.Equal(Convert.ToHexString(SHA256.HashData(data)), await drive.HashDownloadAsync(file with { Size = 0 }, cancel));
+        }
+    }
+
+    [Fact]
     public async Task HttpsSiteRejectsRemoteHttpDownload()
     {
         using (var api = new HttpClient(new Handler(_ => Task.FromResult(Json(new { code = 0, data = new { urls = new[] { new { url = "http://cdn.example/file" } } } })))))

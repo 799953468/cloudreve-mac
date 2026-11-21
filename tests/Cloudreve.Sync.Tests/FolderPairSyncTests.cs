@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Web;
@@ -28,10 +29,10 @@ public sealed class FolderPairSyncTests : IDisposable
         pair = store.Create(temp.CreateSubdirectory("local").FullName, Root, site.RootId);
     }
 
-    private Task<PairSyncResult> RunAsync()
+    private Task<PairSyncResult> RunAsync(SyncActivity? activity = null)
     {
         var restored = new FolderPairStore(Path.Combine(temp.FullName, "settings"), session);
-        return new FolderPairSync(restored, restored.Load()!, new DriveClient(http, http, session, _ => { })).RunAsync(TestContext.Current.CancellationToken);
+        return new FolderPairSync(restored, restored.Load()!, new DriveClient(http, http, session, _ => { }), activity).RunAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -123,6 +124,160 @@ public sealed class FolderPairSyncTests : IDisposable
         Assert.Equal("original", site.Files[Root + "/old"].Text);
         Assert.Equal("other", site.Files[Root + "/new"].Text);
         Assert.Equal(transfers, site.Transfers);
+    }
+
+    [Fact]
+    public async Task OverlapsIndependentFilesAndCheckpointsEachVerifiedCopy()
+    {
+        site.Put(Root + "/a", "cloud");
+        foreach (string key in new[] { "b", "c", "d" })
+        {
+            File.WriteAllText(Path.Combine(pair.Local, key), key);
+        }
+
+        var both = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int started = 0;
+        site.BeforeStorageAsync = async (_, token) =>
+        {
+            if (Interlocked.Increment(ref started) == 2)
+            {
+                both.TrySetResult();
+            }
+
+            await release.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        };
+        var activity = new SyncActivity();
+        var sync = RunAsync(activity);
+        try
+        {
+            await both.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            Assert.Equal(["a", "b"], activity.ChangesSince(-1)!.Active.Select(file => file.Entry.Key).Order());
+        }
+        finally
+        {
+            release.TrySetResult();
+            await sync;
+        }
+
+        var result = await sync;
+        Assert.Equal(3, result.Uploaded);
+        Assert.Equal(1, result.Downloaded);
+        Assert.Empty(result.Conflicts);
+        Assert.Equal("cloud", File.ReadAllText(Path.Combine(pair.Local, "a")));
+        Assert.Equal(["b", "c", "d"], new[] { "b", "c", "d" }.Select(key => site.Files[Root + "/" + key].Text));
+        Assert.Equal(4, store.ReadBaseline(pair).Count);
+        Assert.Empty(activity.ChangesSince(-1)!.Active);
+        Assert.Equal(4, activity.ChangesSince(-1)!.Recent.Length);
+    }
+
+    [Fact]
+    public async Task FailedBatchPersistsSuccessfulFilesAndRetriesOnlyUnfinishedOnes()
+    {
+        foreach (string key in new[] { "a", "b", "c" })
+        {
+            site.Put(Root + "/" + key, key);
+        }
+
+        var thirdStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        site.BeforeStorageAsync = async (uri, token) =>
+        {
+            if (uri == Root + "/b")
+            {
+                await thirdStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+                throw new HttpRequestException("busy", null, HttpStatusCode.ServiceUnavailable);
+            }
+
+            if (uri == Root + "/c")
+            {
+                thirdStarted.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }
+        };
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => RunAsync());
+        Assert.Equal("a", Assert.Single(store.ReadBaseline(pair)).Key);
+        Assert.Empty(Directory.GetFiles(pair.Local, "*.part"));
+        site.BeforeStorageAsync = null;
+        Assert.Equal(2, (await RunAsync()).Downloaded);
+        Assert.Equal(3, store.ReadBaseline(pair).Count);
+    }
+
+    [Fact]
+    public async Task ReusesVerifiedDigestAfterRestartWithoutOpeningTheFile()
+    {
+        site.Put(Root + "/doc", "original");
+        await RunAsync();
+        string path = Path.Combine(pair.Local, "doc");
+        var baseline = store.ReadBaseline(pair)["doc"];
+        Assert.SkipWhen(MacFile.GetContentVersion(path) == null, "Volume does not provide a content generation.");
+        Assert.NotEqual(0u, baseline.LocalGeneration);
+        Assert.Equal(Convert.ToHexString(SHA256.HashData("original"u8)), baseline.LocalHash);
+        int transfers = site.Transfers;
+
+        using (var locked = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            // Prove an ordinary content read would fail while the inventory scan can still complete.
+            await Assert.ThrowsAsync<IOException>(() => PairInventory.HashAsync(path, TestContext.Current.CancellationToken));
+            Assert.Empty((await RunAsync()).Conflicts);
+        }
+
+        Assert.Equal(transfers, site.Transfers);
+        Assert.Equal(baseline, store.ReadBaseline(pair)["doc"]);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DetectsSameSizeChangesEvenWithRestoredModificationTime(bool replaceFile)
+    {
+        site.Put(Root + "/doc", "first");
+        await RunAsync();
+        string path = Path.Combine(pair.Local, "doc");
+        var modified = File.GetLastWriteTimeUtc(path);
+        if (replaceFile)
+        {
+            string replacement = Path.Combine(temp.FullName, "replacement");
+            File.WriteAllText(replacement, "other");
+            File.Move(replacement, path, true);
+        }
+        else
+        {
+            File.WriteAllText(path, "other");
+        }
+
+        File.SetLastWriteTimeUtc(path, modified);
+        Assert.Equal(1, (await RunAsync()).Uploaded);
+        Assert.Equal("other", site.Files[Root + "/doc"].Text);
+    }
+
+    [Fact]
+    public async Task RechecksCachedLocalContentBeforeInstallingCloudChange()
+    {
+        site.Put(Root + "/doc", "first");
+        await RunAsync();
+        string path = Path.Combine(pair.Local, "doc");
+        var baseline = store.ReadBaseline(pair)["doc"];
+        site.Put(Root + "/doc", "cloud");
+        site.BeforeList = _ => File.WriteAllText(path, "local");
+
+        await Assert.ThrowsAsync<IOException>(() => RunAsync());
+        Assert.Equal("local", File.ReadAllText(path));
+        Assert.Equal("cloud", site.Files[Root + "/doc"].Text);
+        Assert.Equal(baseline, store.ReadBaseline(pair)["doc"]);
+    }
+
+    [Fact]
+    public async Task RejectsIncorrectUploadReadbackWithoutCheckpointing()
+    {
+        string path = Path.Combine(pair.Local, "doc");
+        File.WriteAllText(path, "local");
+        site.ReadbackOverride = "wrong";
+
+        await Assert.ThrowsAsync<IOException>(() => RunAsync());
+        Assert.Empty(store.ReadBaseline(pair));
+        Assert.Equal("local", File.ReadAllText(path));
+        Assert.Empty(Directory.GetFiles(pair.Local, "*.part"));
     }
 
     [Fact]
@@ -493,11 +648,14 @@ public sealed class FolderPairSyncTests : IDisposable
         internal readonly List<string> TrashRequests = [];
         internal int Requests, Transfers;
         internal bool Incomplete, Truncate;
+        internal string? ReadbackOverride;
+        internal Func<string, CancellationToken, Task>? BeforeStorageAsync;
         internal string? RejectTrash;
         internal Action<string>? BeforeList;
         internal string RootId = "original-folder";
         private int sequence;
-        private string? uploading;
+        private readonly Dictionary<string, string> uploads = [];
+        private readonly SemaphoreSlim requestGate = new(1);
 
         internal void Put(string uri, string text)
         {
@@ -534,6 +692,25 @@ public sealed class FolderPairSyncTests : IDisposable
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            if (request.RequestUri!.Host == "storage.example" && BeforeStorageAsync != null)
+            {
+                string target = HttpUtility.ParseQueryString(request.RequestUri.Query)["uri"]!;
+                await BeforeStorageAsync(target, cancellationToken);
+            }
+
+            await requestGate.WaitAsync(cancellationToken);
+            try
+            {
+                return await HandleAsync(request, cancellationToken);
+            }
+            finally
+            {
+                requestGate.Release();
+            }
+        }
+
+        private async Task<HttpResponseMessage> HandleAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
             Requests++;
             var uri = request.RequestUri!;
             var query = HttpUtility.ParseQueryString(uri.Query);
@@ -541,7 +718,7 @@ public sealed class FolderPairSyncTests : IDisposable
             {
                 Assert.Null(request.Headers.Authorization);
                 Transfers++;
-                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(Truncate ? "" : Files[query["uri"]!].Text) };
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(Truncate ? "" : ReadbackOverride ?? Files[query["uri"]!].Text) };
             }
 
             Assert.NotNull(request.Headers.Authorization);
@@ -560,9 +737,9 @@ public sealed class FolderPairSyncTests : IDisposable
                 return Ok(Entry(query["uri"]!));
             }
 
-            if (uri.AbsolutePath == "/api/v4/file/upload/id/0")
+            if (uri.AbsolutePath.StartsWith("/api/v4/file/upload/", StringComparison.Ordinal))
             {
-                Put(uploading!, await request.Content!.ReadAsStringAsync(cancellationToken));
+                Put(uploads[uri.Segments[^2].TrimEnd('/')], await request.Content!.ReadAsStringAsync(cancellationToken));
                 Transfers++;
                 return Ok(null);
             }
@@ -580,14 +757,16 @@ public sealed class FolderPairSyncTests : IDisposable
                     Move(oldPath, body.GetProperty("dst").GetString() + oldPath[oldPath.LastIndexOf('/')..]);
                     return Ok(null);
                 case "/api/v4/file/upload":
-                    uploading = body.GetProperty("uri").GetString()!;
+                    string uploading = body.GetProperty("uri").GetString()!;
                     if (Files.TryGetValue(uploading, out var previous))
                     {
                         Assert.Equal(previous.Version, body.GetProperty("previous").GetString());
                         Assert.Equal("version", body.GetProperty("entity_type").GetString());
                     }
 
-                    return Ok(new { session_id = "id", chunk_size = 0 });
+                    string id = Guid.NewGuid().ToString("N");
+                    uploads.Add(id, uploading);
+                    return Ok(new { session_id = id, chunk_size = 0 });
                 case "/api/v4/file/url":
                     string source = body.GetProperty("uris")[0].GetString()!;
                     Assert.Equal(Files[source].Version, body.GetProperty("entity").GetString());

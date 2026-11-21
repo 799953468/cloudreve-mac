@@ -1,7 +1,9 @@
+using System.Buffers;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Net.ServerSentEvents;
+using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace Cloudreve.Desktop;
@@ -193,6 +195,34 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
 
     internal async Task DownloadAsync(DriveEntry file, string destination, CancellationToken cancel, SyncActivity? activity = null)
     {
+        string temp = Path.Combine(Path.GetDirectoryName(destination)!, $".cloudreve-{Guid.NewGuid():N}.part");
+        using (var output = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true))
+        {
+            try
+            {
+                await ReadDownloadAsync(file, output, null, cancel, activity);
+                output.Close();
+                cancel.ThrowIfCancellationRequested();
+                File.Move(temp, destination, true);
+            }
+            finally
+            {
+                File.Delete(temp);
+            }
+        }
+    }
+
+    internal async Task<string> HashDownloadAsync(DriveEntry file, CancellationToken cancel, SyncActivity? activity = null)
+    {
+        using (var digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
+        {
+            await ReadDownloadAsync(file, null, digest, cancel, activity);
+            return Convert.ToHexString(digest.GetHashAndReset());
+        }
+    }
+
+    private async Task ReadDownloadAsync(DriveEntry file, Stream? output, IncrementalHash? digest, CancellationToken cancel, SyncActivity? activity)
+    {
         var parameters = new Dictionary<string, object> { ["uris"] = new[] { file.Uri }, ["download"] = true };
         if (!string.IsNullOrEmpty(file.Version))
         {
@@ -212,57 +242,53 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
         using (var response = await storage.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancel))
         {
             response.EnsureSuccessStatusCode();
-            string temp = Path.Combine(Path.GetDirectoryName(destination)!, $".cloudreve-{Guid.NewGuid():N}.part");
-            using (var output = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true))
+            using (var input = await response.Content.ReadAsStreamAsync(cancel))
             {
+                const int bufferSize = 81920;
+                byte[] buffer = ArrayPool<byte>.Shared.Rent(bufferSize);
+                long received = 0;
                 try
                 {
                     activity?.BeginTransfer(UiText.Get("读取云端内容"), file.Size);
-                    try
+                    while (true)
                     {
-                        using (var input = await response.Content.ReadAsStreamAsync(cancel))
+                        if (activity != null)
                         {
-                            byte[] buffer = new byte[81920];
-                            while (true)
-                            {
-                                if (activity != null)
-                                {
-                                    await activity.WaitForResumeAsync(cancel);
-                                }
-
-                                int read = await input.ReadAsync(buffer, cancel);
-                                if (read == 0)
-                                {
-                                    break;
-                                }
-
-                                if (read > file.Size - output.Position)
-                                {
-                                    throw new InvalidDataException(UiText.Get("下载内容超过预期大小。"));
-                                }
-
-                                await output.WriteAsync(buffer.AsMemory(0, read), cancel);
-                                activity?.ReportBytes(output.Position);
-                            }
+                            await activity.WaitForResumeAsync(cancel);
                         }
-                    }
-                    finally
-                    {
-                        activity?.EndTransfer();
+
+                        int read = await input.ReadAsync(buffer.AsMemory(0, bufferSize), cancel);
+                        if (read == 0)
+                        {
+                            break;
+                        }
+
+                        if (read > file.Size - received)
+                        {
+                            throw new InvalidDataException(UiText.Get("下载内容超过预期大小。"));
+                        }
+
+                        if (output != null)
+                        {
+                            await output.WriteAsync(buffer.AsMemory(0, read), cancel);
+                        }
+
+                        digest?.AppendData(buffer, 0, read);
+                        received += read;
+                        activity?.ReportBytes(received);
                     }
 
-                    if (output.Length != file.Size)
+                    if (received != file.Size)
                     {
                         throw new InvalidDataException(UiText.Get("文件大小已变化或下载不完整，请刷新后重试。"));
                     }
 
-                    output.Close();
                     cancel.ThrowIfCancellationRequested();
-                    File.Move(temp, destination, true);
                 }
                 finally
                 {
-                    File.Delete(temp);
+                    ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+                    activity?.EndTransfer();
                 }
             }
         }

@@ -11,6 +11,7 @@ internal sealed partial class ActivityWindow : Window
     private readonly WorkspaceHost host;
     private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly Dictionary<MountedDrive, ActivitySnapshot> snapshots = [];
+    private readonly TextDecorationCollection folderUnderline = [new TextDecoration { Location = TextDecorationLocation.Underline }];
     private MountedDrive? selected;
 
     internal ActivityWindow(WorkspaceHost host)
@@ -106,16 +107,16 @@ internal sealed partial class ActivityWindow : Window
         }
 
         Tasks.Children.Clear();
-        var active = snapshots.Where(s => s.Value.Current != null).ToArray();
+        var active = snapshots.SelectMany(s => s.Value.Active.Select(file => (Drive: s.Key, File: file))).ToArray();
         var recent = snapshots.SelectMany(s => s.Value.Recent.Select(e => (Drive: s.Key, Entry: e))).OrderByDescending(e => e.Entry.Time).Take(100).ToArray();
         Empty.IsVisible = active.Length == 0 && recent.Length == 0;
         TaskScroll.IsVisible = !Empty.IsVisible;
         if (active.Length > 0)
         {
             Section("popup.syncing");
-            foreach (var (drive, state) in active)
+            foreach (var (drive, file) in active)
             {
-                Row(drive, state.Current!, true, state.Transfer);
+                Row(drive, file.Entry, true, file.Transfer);
             }
         }
 
@@ -135,38 +136,56 @@ internal sealed partial class ActivityWindow : Window
 
     private void Section(string key)
     {
-        Tasks.Children.Add(new TextBlock { Text = DesktopText.Get(key), FontWeight = FontWeight.Medium, Margin = new Thickness(16, 12, 16, 6) });
+        Tasks.Children.Add(new TextBlock
+        {
+            Classes = { "secondary" }, Text = DesktopText.Get(key), FontSize = 12, FontWeight = FontWeight.SemiBold,
+            LineHeight = 20, Margin = new Thickness(16, 8, 16, 0)
+        });
     }
 
     private void Row(MountedDrive drive, ActivityEntry entry, bool active, ActivityTransfer? transfer)
     {
-        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("32,*"), ColumnSpacing = 8, Margin = new Thickness(16, 8) };
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("32,*"), ColumnSpacing = 8, Margin = new Thickness(16, 12) };
         var file = new PathIcon
         {
             Width = 22, Height = 26, Foreground = active ? Brushes.SteelBlue : Brushes.Gray,
             Data = StreamGeometry.Parse("M4 1h10l6 6v16H4z M6 3v18h12V9h-6V3z")
         };
         row.Children.Add(file);
-        var lines = new StackPanel { Spacing = 2 };
+        var lines = new StackPanel { Spacing = 3 };
         Grid.SetColumn(lines, 1);
         row.Children.Add(lines);
-        lines.Children.Add(new TextBlock { Text = Path.GetFileName(entry.Key), TextTrimming = TextTrimming.CharacterEllipsis, FontWeight = FontWeight.Medium });
+        lines.Children.Add(new TextBlock { Text = Path.GetFileName(entry.Key), TextTrimming = TextTrimming.CharacterEllipsis, FontWeight = FontWeight.Medium, LineHeight = 20 });
         if (active)
         {
             lines.Children.Add(new TextBlock
             {
-                Classes = { "secondary" }, FontSize = 12,
-                Text = transfer == null ? DesktopText.Get("popup.processing") : $"{DesktopFiles.Bytes(transfer.Completed)} / {DesktopFiles.Bytes(transfer.Total)} - {DesktopFiles.Bytes(transfer.BytesPerSecond)}/s"
+                Classes = { "secondary" }, FontSize = 12, LineHeight = 18,
+                Text = transfer == null
+                    ? DesktopText.Get("popup.processing")
+                    : $"{DesktopFiles.Bytes(transfer.Completed)} / {DesktopFiles.Bytes(transfer.Total)} - {DesktopFiles.Bytes(transfer.BytesPerSecond)}/s"
             });
-            lines.Children.Add(new ProgressBar { Height = 4, Minimum = 0, Maximum = Math.Max(1, transfer?.Total ?? 1), Value = transfer?.Completed ?? 0, IsIndeterminate = transfer == null });
+            lines.Children.Add(new ProgressBar
+                { Classes = { "syncProgress" }, Height = 4, Minimum = 0, Maximum = Math.Max(1, transfer?.Total ?? 1), Value = transfer?.Completed ?? 0, IsIndeterminate = transfer == null });
         }
         else if (drive.Pair != null)
         {
             var path = Path.Combine(drive.Pair.Local, entry.Key);
-            var line = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 3 };
-            line.Children.Add(new TextBlock { Classes = { "secondary" }, FontSize = 12, Text = (entry.Status == UiText.Get("失败") ? entry.Status : RelativeTime(entry.Time)) + " · " });
-            var link = new Button { Content = Path.GetFileName(Path.GetDirectoryName(path)), Classes = { "tool" }, MinHeight = 0, FontSize = 12, Padding = new Thickness(0) };
+            var line = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = 3 };
+            line.Children.Add(new TextBlock
+            {
+                Classes = { "secondary" }, FontSize = 12, LineHeight = 18, VerticalAlignment = VerticalAlignment.Center,
+                Text = (entry.Status == UiText.Get("失败") ? entry.Status : RelativeTime(entry.Time)) + " · "
+            });
+            var folderName = Path.GetFileName(Path.GetDirectoryName(path));
+            var link = new Button
+            {
+                Content = new TextBlock { Text = folderName, TextDecorations = folderUnderline, TextTrimming = TextTrimming.CharacterEllipsis },
+                Classes = { "tool", "driveLink" }, MinHeight = 0, FontSize = 12, Padding = new Thickness(0)
+            };
+            Avalonia.Automation.AutomationProperties.SetName(link, folderName);
             link.Click += (_, _) => { DesktopFiles.Reveal(path); };
+            Grid.SetColumn(link, 1);
             line.Children.Add(link);
             lines.Children.Add(line);
         }

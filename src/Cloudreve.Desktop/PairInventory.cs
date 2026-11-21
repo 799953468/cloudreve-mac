@@ -3,7 +3,7 @@ using Cloudreve.Sync;
 
 namespace Cloudreve.Desktop;
 
-internal sealed record PairNode(string Key, NodeKind Kind, string? Hash = null, DriveEntry? Remote = null, string? LocalId = null);
+internal sealed record PairNode(string Key, NodeKind Kind, string? Hash = null, DriveEntry? Remote = null, string? LocalId = null, uint LocalGeneration = 0);
 
 internal sealed class PairInventory
 {
@@ -54,7 +54,27 @@ internal sealed class PairInventory
         }
     }
 
-    internal static async Task<PairInventory> ReadLocalAsync(FolderPair pair, PairIgnoreRules rules, CancellationToken cancel)
+    internal static async Task<PairNode> ReadLocalFileAsync(string key, string path, FileBaseline? previous, CancellationToken cancel)
+    {
+        var version = MacFile.GetContentVersion(path);
+        if (version is { } current && previous is { IsDirectory: false, LocalHash.Length: 64 } &&
+            previous.LocalId == current.LocalId && previous.LocalGeneration == current.Generation)
+        {
+            return new PairNode(key, NodeKind.File, previous.LocalHash, LocalId: current.LocalId, LocalGeneration: current.Generation);
+        }
+
+        string hash = await HashAsync(path, cancel);
+        // Never checkpoint a digest against metadata sampled only after the read.
+        if (version != null && MacFile.GetContentVersion(path) != version)
+        {
+            throw new IOException(UiText.Get("文件在同步期间已变化。"));
+        }
+
+        return new PairNode(key, NodeKind.File, hash, LocalId: version?.LocalId ?? MacFile.Identity(path), LocalGeneration: version?.Generation ?? 0);
+    }
+
+    internal static async Task<PairInventory> ReadLocalAsync(FolderPair pair, PairIgnoreRules rules, IReadOnlyDictionary<string, FileBaseline> baseline,
+        CancellationToken cancel)
     {
         var inventory = new PairInventory();
         var pending = new Stack<string>();
@@ -79,9 +99,15 @@ internal sealed class PairInventory
                     continue;
                 }
 
-                string? hash = kind == NodeKind.File ? await HashAsync(path, cancel) : null;
-                string? localId = kind is NodeKind.File or NodeKind.Directory ? MacFile.Identity(path) : null;
-                if (inventory.Add(new PairNode(key, kind, hash, LocalId: localId)) && kind == NodeKind.Directory)
+                if (kind == NodeKind.File)
+                {
+                    baseline.TryGetValue(key, out var previous);
+                    inventory.Add(await ReadLocalFileAsync(key, path, previous, cancel));
+                    continue;
+                }
+
+                string? localId = kind == NodeKind.Directory ? MacFile.Identity(path) : null;
+                if (inventory.Add(new PairNode(key, kind, LocalId: localId)) && kind == NodeKind.Directory)
                 {
                     pending.Push(path);
                 }

@@ -4,6 +4,7 @@ using System.Web;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Styling;
 using Avalonia.Themes.Fluent;
@@ -83,6 +84,25 @@ public sealed class WindowTests : IDisposable
                 settings.Navigation.SelectedIndex = 1;
                 Assert.True(settings.GeneralPage.IsVisible);
                 Assert.Equal(5, settings.GeneralPage.GetVisualDescendants().OfType<ToggleSwitch>().Count());
+                settings.RequestedThemeVariant = dark ? ThemeVariant.Dark : ThemeVariant.Light;
+                settings.UpdateLayout();
+                var selects = settings.GeneralPage.GetVisualDescendants().OfType<ComboBox>().ToArray();
+                Assert.Equal(3, selects.Length);
+                var language = selects[0];
+                var initialLanguage = language.SelectedItem;
+                Assert.True(language.Focus(NavigationMethod.Tab));
+                settings.KeyPressQwerty(PhysicalKey.Space, RawInputModifiers.None);
+                settings.KeyReleaseQwerty(PhysicalKey.Space, RawInputModifiers.None);
+                Assert.True(language.IsDropDownOpen);
+                var option = Assert.IsType<ComboBoxItem>(language.ContainerFromIndex(language.SelectedIndex));
+                Assert.True(option.IsSelected);
+                var menu = TopLevel.GetTopLevel(option)!;
+                Capture(settings, dark ? "general-dark" : "general");
+                Capture(menu, dark ? "language-menu-dark" : "language-menu");
+                menu.KeyPressQwerty(PhysicalKey.Escape, RawInputModifiers.None);
+                menu.KeyReleaseQwerty(PhysicalKey.Escape, RawInputModifiers.None);
+                Assert.False(language.IsDropDownOpen);
+                Assert.Equal(initialLanguage, language.SelectedItem);
                 settings.Navigation.SelectedIndex = 2;
                 Assert.True(settings.AboutPage.IsVisible);
                 settings.Navigation.SelectedIndex = 0;
@@ -173,8 +193,10 @@ public sealed class WindowTests : IDisposable
         }, TestContext.Current.CancellationToken);
     }
 
-    [Fact]
-    public async Task RestoredMountsRunWithoutWindowsAndFilterRealActivity()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RestoredMountsRunWithoutWindowsAndFilterRealActivity(bool dark)
     {
         await using var ui = HeadlessUnitTestSession.StartNew(typeof(TestApplication));
         await ui.Dispatch(async () =>
@@ -205,18 +227,21 @@ public sealed class WindowTests : IDisposable
                 personal.Activity.Finish("完成");
                 host.OpenPopup();
                 var popup = host.Popup!;
+                var theme = dark ? ThemeVariant.Dark : ThemeVariant.Light;
+                popup.RequestedThemeVariant = theme;
                 popup.Refresh(true);
                 Assert.Equal("正在同步 1 个文件...", popup.Footer.Text);
                 Assert.False(popup.Empty.IsVisible);
                 Assert.Contains("first.txt", Labels(popup.Tasks));
                 Assert.Contains("second.txt", Labels(popup.Tasks));
-                Capture(popup, "activity");
+                Capture(popup, dark ? "activity-dark" : "activity");
                 Click(Assert.IsType<Button>(popup.Chips.Children[2]));
                 Assert.DoesNotContain("first.txt", Labels(popup.Tasks));
                 Assert.Contains("second.txt", Labels(popup.Tasks));
                 host.OpenSettings();
                 Assert.Equal(2, host.Settings!.Cards.Children.Count);
-                Capture(host.Settings, "drives");
+                host.Settings.RequestedThemeVariant = theme;
+                Capture(host.Settings, dark ? "drives-dark" : "drives");
                 host.Settings.Close();
                 popup.Close();
                 Assert.Equal(2, host.Drives.Count);
@@ -232,7 +257,7 @@ public sealed class WindowTests : IDisposable
         }, TestContext.Current.CancellationToken);
     }
 
-    private static void Capture(Window window, string name)
+    private static void Capture(TopLevel window, string name)
     {
         if (Environment.GetEnvironmentVariable("CLOUDREVE_UI_CAPTURES") is not { Length: > 0 } dir)
         {

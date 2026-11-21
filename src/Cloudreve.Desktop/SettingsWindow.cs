@@ -107,12 +107,21 @@ internal sealed partial class SettingsWindow : Window
         foreach (var (drive, expired, lost, space, pair, name) in shown)
         {
             var content = new StackPanel { Spacing = 8 };
-            var head = new Grid { ColumnDefinitions = new ColumnDefinitions("44,*,Auto"), ColumnSpacing = 10 };
-            head.Children.Add(new Image { Source = DriveLogo, Width = 40, Height = 40, VerticalAlignment = VerticalAlignment.Top });
-            var details = new StackPanel { Spacing = 2 };
+            var head = new Grid { ColumnDefinitions = new ColumnDefinitions("48,*"), ColumnSpacing = 16 };
+            head.Children.Add(new Image { Source = DriveLogo, Width = 40, Height = 40, Margin = new Thickness(4), VerticalAlignment = VerticalAlignment.Top });
+            var details = new StackPanel { Spacing = 4 };
             Grid.SetColumn(details, 1);
             head.Children.Add(details);
-            details.Children.Add(new TextBlock { Text = name, FontSize = 16, FontWeight = FontWeight.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis });
+            var title = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 8, Margin = new Thickness(0, 0, 0, 2) };
+            title.Children.Add(new TextBlock { Text = name, FontSize = 16, FontWeight = FontWeight.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis });
+            var status = new TextBlock
+            {
+                FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Foreground = expired ? Brushes.IndianRed : lost ? Brushes.DarkOrange : Brushes.SeaGreen,
+                Text = "● " + DesktopText.Get("settings.driveStatus." + (expired ? "credentialExpired" : lost ? "eventPushLost" : "active"))
+            };
+            Grid.SetColumn(status, 1);
+            title.Children.Add(status);
+            details.Children.Add(title);
             var site = ActionButton(drive.Account.Site.TrimEnd('/'), async () => { await Launcher.LaunchUriAsync(new Uri(drive.Account.Site)); });
             StyleLink(site, "SiteIcon");
             details.Children.Add(site);
@@ -124,46 +133,42 @@ internal sealed partial class SettingsWindow : Window
                 details.Children.Add(folder);
             }
 
-            var status = new TextBlock
-            {
-                FontSize = 12, Foreground = expired ? Brushes.IndianRed : lost ? Brushes.DarkOrange : Brushes.SeaGreen,
-                Text = "● " + DesktopText.Get("settings.driveStatus." + (expired ? "credentialExpired" : lost ? "eventPushLost" : "active"))
-            };
-            Grid.SetColumn(status, 2);
-            head.Children.Add(status);
             content.Children.Add(head);
             if (space is { } quota && quota.Total > 0)
             {
                 double pct = 100d * quota.Used / quota.Total;
-                var usage = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), Margin = new Thickness(54, 4, 0, 0) };
+                var usage = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = 8, Margin = new Thickness(0, 8, 0, 0) };
                 usage.Children.Add(new TextBlock { Classes = { "secondary" }, Text = DesktopText.Get("settings.storage"), FontSize = 12 });
                 var label = new TextBlock
                 {
-                    Classes = { "secondary" }, FontSize = 12, HorizontalAlignment = HorizontalAlignment.Right,
+                    Classes = { "secondary" }, FontSize = 12, TextAlignment = TextAlignment.Right, TextWrapping = TextWrapping.Wrap,
                     Text = $"{DesktopFiles.Bytes(quota.Used)} / {DesktopFiles.Bytes(quota.Total)} ({pct:0.#}%)"
                 };
                 Grid.SetColumn(label, 1);
                 usage.Children.Add(label);
-                content.Children.Add(usage);
-                content.Children.Add(new ProgressBar { Height = 6, Margin = new Thickness(54, 0, 0, 6), Maximum = 100, Value = pct });
+                details.Children.Add(usage);
+                details.Children.Add(new ProgressBar { Classes = { "syncProgress" }, Height = 6, Maximum = 100, Value = pct });
             }
 
-            content.Children.Add(new Separator());
-            var footer = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
-            var actions = new WrapPanel();
+            content.Children.Add(new Separator { Classes = { "cardDivider" } });
+            var footer = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 8 };
+            var actions = new WrapPanel { ItemSpacing = 8, LineSpacing = 4 };
             footer.Children.Add(actions);
             if (expired)
             {
-                actions.Children.Add(ActionButton(DesktopText.Get("settings.reauthorize"), () =>
+                var reauthorize = ActionButton(DesktopText.Get("settings.reauthorize"), () =>
                 {
                     host.OpenAdd(drive);
                     return Task.CompletedTask;
-                }));
+                });
+                reauthorize.Classes.Add("subtle");
+                actions.Children.Add(reauthorize);
             }
 
             if (pair != null)
             {
                 var rules = ActionButton(DesktopText.Get("settings.ignorePatterns"), () => EditRulesAsync(drive));
+                rules.Classes.Add("subtle");
                 IconLabel(rules, "FilterIcon");
                 actions.Children.Add(rules);
             }
@@ -176,8 +181,7 @@ internal sealed partial class SettingsWindow : Window
                     await host.RemoveAsync(drive);
                 }
             });
-            delete.Foreground = Brushes.IndianRed;
-            delete.Background = new SolidColorBrush(Color.Parse("#12D32F2F"));
+            delete.Classes.Add("danger");
             IconLabel(delete, "TrashIcon");
             Grid.SetColumn(delete, 1);
             footer.Children.Add(delete);
@@ -198,11 +202,17 @@ internal sealed partial class SettingsWindow : Window
 
     private void IconLabel(Button button, string icon)
     {
-        if (!this.TryFindResource(icon, out var geometry) || geometry is not Geometry data) { return; }
+        if (!this.TryFindResource(icon, out var geometry) || geometry is not Geometry data)
+        {
+            return;
+        }
+
         string label = button.Content?.ToString() ?? "";
-        var line = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        var line = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = 6 };
         line.Children.Add(new PathIcon { Data = data, Width = 14, Height = 14 });
-        line.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis });
+        var text = new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+        Grid.SetColumn(text, 1);
+        line.Children.Add(text);
         Avalonia.Automation.AutomationProperties.SetName(button, label);
         button.Content = line;
     }
@@ -324,7 +334,7 @@ internal sealed partial class SettingsWindow : Window
 
     private void Select(StackPanel group, string key, string[] values, int selected, Action<int> save)
     {
-        var combo = new ComboBox { ItemsSource = values, SelectedIndex = selected, MinWidth = 72 };
+        var combo = new ComboBox { Classes = { "preference" }, ItemsSource = values, SelectedIndex = selected };
         combo.SelectionChanged += (_, _) =>
         {
             if (combo.SelectedIndex >= 0)

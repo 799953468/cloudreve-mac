@@ -28,7 +28,10 @@ internal static class Program
         try
         {
             Log.Information("Starting Cloudreve Desktop");
-            int exitCode = AppBuilder.Configure<DesktopApp>().UsePlatformDetect().StartWithClassicDesktopLifetime(args);
+            int exitCode = AppBuilder.Configure<DesktopApp>()
+                .UsePlatformDetect()
+                .With(new MacOSPlatformOptions { ShowInDock = false })
+                .StartWithClassicDesktopLifetime(args);
             Log.Information("Cloudreve Desktop stopped with exit code {ExitCode}", exitCode);
             return exitCode;
         }
