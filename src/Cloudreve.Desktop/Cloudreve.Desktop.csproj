@@ -19,6 +19,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Remove="WorkspaceSettings.cs" />
+    <Compile Include="../Cloudreve.Sync/MacFile.cs" Link="Sync/MacFile.cs" />
   </ItemGroup>
   <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('OSX')) and '$(Configuration)' == 'Debug' and '$(RuntimeIdentifier)' == '' and '$(MacBundle)' != 'true'">
     <DebugBundleRoot>$(MSBuildProjectDirectory)/bin/Debug/$(TargetFramework)/Cloudreve.app</DebugBundleRoot>
