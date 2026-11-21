@@ -18,8 +18,9 @@ internal sealed partial class FolderPairSync
     }
 
     private async Task<bool> SyncDirectoriesAsync(PairInventory local, PairInventory remote, Dictionary<string, FileBaseline> baseline,
-        PairIgnoreRules rules, HashSet<string> conflicts, HashSet<string> blocked, CancellationToken cancel)
+        PairIgnoreRules rules, HashSet<string> conflicts, HashSet<string> blocked, List<PairNode> directoryTrash, CancellationToken cancel)
     {
+        ProtectMovedTrees(local, remote, baseline, conflicts, blocked);
         var keys = baseline.Where(entry => entry.Value.IsDirectory).Select(entry => entry.Key)
             .Concat(local.Nodes.Values.Concat(remote.Nodes.Values).Where(node => node.Kind == NodeKind.Directory).Select(node => node.Key))
             .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -58,9 +59,23 @@ internal sealed partial class FolderPairSync
             }
 
             string path = Path.Combine(pair.Local, key);
-            if (previous != null && (here == null || there == null))
+            if (previous != null && here == null)
             {
-                // Cloudreve trash is recursive and has no atomic empty-only condition. Never issue it for a directory.
+                blocked.Add(key);
+                if (previous.LocalId != null && !string.IsNullOrEmpty(previous.RemoteId) && there!.Remote!.Id == previous.RemoteId)
+                {
+                    directoryTrash.Add(there);
+                }
+                else
+                {
+                    conflicts.Add(key);
+                }
+
+                continue;
+            }
+
+            if (previous != null && there == null)
+            {
                 FolderPairStore.Verify(pair);
                 if (here != null && previous.LocalId != null && MacFile.Identity(path) == previous.LocalId)
                 {
@@ -136,5 +151,87 @@ internal sealed partial class FolderPairSync
         }
 
         return dirty;
+    }
+
+    private static void ProtectMovedTrees(PairInventory local, PairInventory remote, Dictionary<string, FileBaseline> baseline,
+        HashSet<string> conflicts, HashSet<string> blocked)
+    {
+        var missing = baseline.Where(entry => entry.Value.IsDirectory && !local.Nodes.ContainsKey(entry.Key) && remote.Nodes.ContainsKey(entry.Key))
+            .Select(entry => entry.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (missing.Count == 0)
+        {
+            return;
+        }
+
+        // A directory rename, or moving a child out before deleting its parent, is not an unambiguous deletion.
+        var localById = local.Nodes.Values.Where(node => node.LocalId != null).ToLookup(node => node.LocalId!);
+        foreach (var (key, previous) in baseline)
+        {
+            if (previous.LocalId == null || local.Nodes.ContainsKey(key))
+            {
+                continue;
+            }
+
+            foreach (var moved in localById[previous.LocalId])
+            {
+                for (string? ancestor = key; !string.IsNullOrEmpty(ancestor); ancestor = Path.GetDirectoryName(ancestor))
+                {
+                    if (missing.Contains(ancestor))
+                    {
+                        blocked.Add(ancestor);
+                        conflicts.Add(ancestor);
+                        blocked.Add(moved.Key);
+                        conflicts.Add(moved.Key);
+                    }
+                }
+            }
+        }
+    }
+
+    private async Task<bool> TryTrashDirectoryAsync(PairNode directory, Dictionary<string, FileBaseline> baseline, PairIgnoreRules rules, CancellationToken cancel)
+    {
+        var target = directory.Remote!;
+        var tree = await PairInventory.ReadRemoteAsync(target.Uri, directory.Key, drive, rules, cancel);
+        if (tree.Excluded.Count != 0)
+        {
+            return false;
+        }
+
+        foreach (var node in tree.Nodes.Values)
+        {
+            if (node.Kind == NodeKind.Unsupported || !baseline.TryGetValue(node.Key, out var known) ||
+                string.IsNullOrEmpty(known.RemoteId) || node.Remote!.Id != known.RemoteId ||
+                known.IsDirectory != (node.Kind == NodeKind.Directory) || !known.IsDirectory && node.Remote.Version != known.RemoteVersion)
+            {
+                return false;
+            }
+        }
+
+        await VerifyRemoteRootAsync(cancel);
+        if (await drive.FolderIdAsync(target.Uri, cancel) != target.Id)
+        {
+            return false;
+        }
+
+        FolderPairStore.Verify(pair);
+        string path = Path.Combine(pair.Local, directory.Key);
+        FolderPairStore.CheckDirectory(Path.GetDirectoryName(path)!);
+        string? parent = Path.GetDirectoryName(directory.Key);
+        if (!string.IsNullOrEmpty(parent) && (!baseline.TryGetValue(parent, out var knownParent) || knownParent.LocalId == null ||
+                                              MacFile.Identity(Path.Combine(pair.Local, parent)) != knownParent.LocalId))
+        {
+            return false;
+        }
+
+        if (MacFile.Inspect(path) != null)
+        {
+            return false;
+        }
+
+        cancel.ThrowIfCancellationRequested();
+        activity?.Start(UiText.Get("移到云端回收站"), directory.Key);
+        await drive.TrashAsync(target, cancel);
+        activity?.Finish(UiText.Get("完成"));
+        return true;
     }
 }

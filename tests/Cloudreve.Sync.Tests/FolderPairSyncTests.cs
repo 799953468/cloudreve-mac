@@ -140,7 +140,7 @@ public sealed class FolderPairSyncTests : IDisposable
     }
 
     [Fact]
-    public async Task SyncsNestedEmptyDirectoriesButNeverTrashesRemoteDirectoryRecursively()
+    public async Task SyncsNestedEmptyDirectoriesAndTheirDeletion()
     {
         Directory.CreateDirectory(Path.Combine(pair.Local, "one/two"));
         site.Folders.Add(Root + "/remote");
@@ -149,9 +149,157 @@ public sealed class FolderPairSyncTests : IDisposable
         Assert.True(Directory.Exists(Path.Combine(pair.Local, "remote")));
         site.Folders.Remove(Root + "/remote");
         Directory.Delete(Path.Combine(pair.Local, "one/two"));
-        Assert.Equal("one/two", Assert.Single((await RunAsync()).Conflicts));
+        Assert.Empty((await RunAsync()).Conflicts);
         Assert.False(Directory.Exists(Path.Combine(pair.Local, "remote")));
-        Assert.Contains(Root + "/one/two", site.Folders);
+        Assert.DoesNotContain(Root + "/one/two", site.Folders);
+        Assert.Equal(Root + "/one/two", Assert.Single(site.TrashRequests));
+    }
+
+    [Fact]
+    public async Task TrashesOnlyTheMissingTreeAndForgetsItsDescendantsAcrossRestart()
+    {
+        site.Folders.UnionWith([Root + "/a", Root + "/a/nested", Root + "/ab"]);
+        site.Put(Root + "/a/nested/note", "nested");
+        site.Put(Root + "/a/other", "other");
+        site.Put(Root + "/ab/note", "keep");
+        await RunAsync();
+        Directory.Delete(Path.Combine(pair.Local, "a"), true);
+
+        var result = await RunAsync();
+        Assert.Empty(result.Conflicts);
+        Assert.Equal(1, result.Removed);
+        Assert.Equal(0, result.Downloaded);
+        Assert.DoesNotContain(Root + "/a/nested", site.Folders);
+        Assert.False(Directory.Exists(Path.Combine(pair.Local, "a")));
+        Assert.Equal("keep", site.Files[Assert.Single(site.Files.Keys)].Text);
+        Assert.Equal(["ab", "ab/note"], store.ReadBaseline(pair).Keys.Order());
+        Assert.Equal(0, (await RunAsync()).Removed);
+        Assert.Equal(Root + "/a", Assert.Single(site.TrashRequests));
+    }
+
+    [Theory]
+    [InlineData("new")]
+    [InlineData("modified")]
+    [InlineData("replaced-folder")]
+    [InlineData("ignored")]
+    [InlineData("reserved")]
+    public async Task ProtectsTheEntireTreeWhenACloudDescendantIsNotSafeToTrash(string change)
+    {
+        site.Folders.UnionWith([Root + "/tree", Root + "/tree/sub"]);
+        site.Put(Root + "/tree/keep", "keep");
+        site.Put(Root + "/tree/sub/doc", "old");
+        store.SaveRules(pair, "*.tmp");
+        await RunAsync();
+        Directory.Delete(Path.Combine(pair.Local, "tree"), true);
+        switch (change)
+        {
+            case "new": site.Put(Root + "/tree/sub/new", "new"); break;
+            case "modified": site.Put(Root + "/tree/sub/doc", "new"); break;
+            case "replaced-folder": site.Ids[Root + "/tree/sub"] = "replacement"; break;
+            case "ignored": site.Put(Root + "/tree/sub/save.tmp", "ignored"); break;
+            case "reserved": site.Put(Root + "/tree/sub/.DS_Store", "reserved"); break;
+        }
+
+        Assert.Equal("tree", Assert.Single((await RunAsync()).Conflicts));
+        Assert.Empty(site.TrashRequests);
+        Assert.Equal("keep", site.Files[Root + "/tree/keep"].Text);
+        Assert.False(Directory.Exists(Path.Combine(pair.Local, "tree")));
+        Assert.Contains("tree/sub/doc", store.ReadBaseline(pair).Keys);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DoesNotTrashRenamedDirectoriesOrFilesMovedOutOfAMissingDirectory(bool moveWholeTree)
+    {
+        site.Folders.Add(Root + "/tree");
+        site.Put(Root + "/tree/doc", "keep");
+        await RunAsync();
+        string tree = Path.Combine(pair.Local, "tree");
+        if (moveWholeTree)
+        {
+            Directory.Move(tree, Path.Combine(pair.Local, "renamed"));
+        }
+        else
+        {
+            File.Move(Path.Combine(tree, "doc"), Path.Combine(pair.Local, "renamed"));
+            Directory.Delete(tree);
+        }
+
+        Assert.Contains("tree", (await RunAsync()).Conflicts);
+        Assert.Empty(site.TrashRequests);
+        Assert.DoesNotContain(Root + "/renamed", site.Folders);
+        Assert.Equal("keep", site.Files[Root + "/tree/doc"].Text);
+    }
+
+    [Fact]
+    public async Task RetriesRejectedDirectoryTrashWithoutForgettingTheTree()
+    {
+        site.Folders.UnionWith([Root + "/first", Root + "/tree"]);
+        site.Put(Root + "/tree/doc", "keep");
+        await RunAsync();
+        Directory.Delete(Path.Combine(pair.Local, "first"));
+        Directory.Delete(Path.Combine(pair.Local, "tree"), true);
+        site.RejectTrash = Root + "/tree";
+        await Assert.ThrowsAsync<HttpRequestException>(() => RunAsync());
+        Assert.DoesNotContain("first", store.ReadBaseline(pair).Keys);
+        Assert.Contains("tree/doc", store.ReadBaseline(pair).Keys);
+        site.RejectTrash = null;
+        Assert.Equal(1, (await RunAsync()).Removed);
+        Assert.Empty(store.ReadBaseline(pair));
+        Assert.Equal([Root + "/first", Root + "/tree", Root + "/tree"], site.TrashRequests);
+    }
+
+    [Theory]
+    [InlineData("local-reappeared")]
+    [InlineData("local-root-unavailable")]
+    [InlineData("cloud-root-replaced")]
+    [InlineData("target-replaced")]
+    [InlineData("late-cloud-edit")]
+    [InlineData("incomplete-list")]
+    public async Task RechecksBothSidesBetweenTheScanAndRecursiveTrash(string change)
+    {
+        string target = Root + "/tree";
+        site.Folders.Add(target);
+        site.Put(target + "/doc", "original");
+        await RunAsync();
+        string local = Path.Combine(pair.Local, "tree");
+        Directory.Delete(local, true);
+        int targetListings = 0;
+        site.BeforeList = parent =>
+        {
+            if (parent != target || ++targetListings != 2)
+            {
+                return;
+            }
+
+            switch (change)
+            {
+                case "local-reappeared": Directory.CreateDirectory(local); break;
+                case "local-root-unavailable": Directory.Move(pair.Local, pair.Local + "-offline"); break;
+                case "cloud-root-replaced": site.RootId = "replacement"; break;
+                case "target-replaced": site.Ids[target] = "replacement"; break;
+                case "late-cloud-edit": site.Put(target + "/doc", "newer"); break;
+                case "incomplete-list": site.Incomplete = true; break;
+            }
+        };
+
+        if (change == "incomplete-list")
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() => RunAsync());
+        }
+        else if (change is "local-root-unavailable" or "cloud-root-replaced")
+        {
+            await Assert.ThrowsAsync<IOException>(() => RunAsync());
+        }
+        else
+        {
+            Assert.Equal("tree", Assert.Single((await RunAsync()).Conflicts));
+        }
+
+        Assert.Empty(site.TrashRequests);
+        Assert.Contains(target, site.Folders);
+        Assert.Contains("tree/doc", store.ReadBaseline(pair).Keys);
     }
 
     [Fact]
@@ -342,8 +490,11 @@ public sealed class FolderPairSyncTests : IDisposable
         internal readonly Dictionary<string, (string Text, string Version)> Files = [];
         internal readonly Dictionary<string, string> Ids = [];
         internal readonly HashSet<string> Folders = [Root];
+        internal readonly List<string> TrashRequests = [];
         internal int Requests, Transfers;
         internal bool Incomplete, Truncate;
+        internal string? RejectTrash;
+        internal Action<string>? BeforeList;
         internal string RootId = "original-folder";
         private int sequence;
         private string? uploading;
@@ -371,7 +522,7 @@ public sealed class FolderPairSyncTests : IDisposable
             bool folder = Folders.Contains(uri);
             return new
             {
-                id = uri == Root ? RootId : folder ? uri : Ids[uri], name = Uri.UnescapeDataString(uri[(uri.LastIndexOf('/') + 1)..]), path = uri, type = folder ? 1 : 0,
+                id = uri == Root ? RootId : folder ? Ids.GetValueOrDefault(uri, uri) : Ids[uri], name = Uri.UnescapeDataString(uri[(uri.LastIndexOf('/') + 1)..]), path = uri, type = folder ? 1 : 0,
                 size = folder ? 0 : Encoding.UTF8.GetByteCount(Files[uri].Text), primary_entity = folder ? null : Files[uri].Version
             };
         }
@@ -397,6 +548,7 @@ public sealed class FolderPairSyncTests : IDisposable
             if (request.Method == HttpMethod.Get && uri.AbsolutePath == "/api/v4/file")
             {
                 string parent = query["uri"]!;
+                BeforeList?.Invoke(parent);
                 Assert.Contains(parent, Folders);
                 var children = Files.Keys.Concat(Folders).Where(key => key[..key.LastIndexOf('/')] == parent).Select(Entry).ToArray();
                 object pagination = Incomplete ? new { total_items = children.Length + 1, page = 0, page_size = 100 } : new { };
@@ -447,7 +599,27 @@ public sealed class FolderPairSyncTests : IDisposable
                 case "/api/v4/file":
                     Assert.Equal(HttpMethod.Delete, request.Method);
                     Assert.False(body.GetProperty("skip_soft_delete").GetBoolean());
-                    Assert.True(Files.Remove(body.GetProperty("uris")[0].GetString()!));
+                    string target = Assert.Single(body.GetProperty("uris").EnumerateArray()).GetString()!;
+                    Assert.NotEqual(Root, target);
+                    TrashRequests.Add(target);
+                    if (target == RejectTrash)
+                    {
+                        return new HttpResponseMessage(HttpStatusCode.Conflict);
+                    }
+
+                    if (Folders.Remove(target))
+                    {
+                        Folders.RemoveWhere(path => path.StartsWith(target + "/", StringComparison.Ordinal));
+                        foreach (string path in Files.Keys.Where(path => path.StartsWith(target + "/", StringComparison.Ordinal)).ToArray())
+                        {
+                            Files.Remove(path);
+                        }
+                    }
+                    else
+                    {
+                        Assert.True(Files.Remove(target));
+                    }
+
                     return Ok(null);
                 default:
                     throw new InvalidOperationException(uri.AbsolutePath);

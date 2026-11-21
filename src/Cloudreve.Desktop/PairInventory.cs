@@ -120,11 +120,11 @@ internal sealed class PairInventory
         return file;
     }
 
-    internal static async Task<PairInventory> ReadRemoteAsync(FolderPair pair, DriveClient drive, PairIgnoreRules rules, CancellationToken cancel)
+    internal static async Task<PairInventory> ReadRemoteAsync(string rootUri, string rootKey, DriveClient drive, PairIgnoreRules rules, CancellationToken cancel)
     {
         var inventory = new PairInventory();
         var pending = new Stack<(string Key, string Uri)>();
-        pending.Push(("", pair.Remote));
+        pending.Push((rootKey, rootUri));
         while (pending.TryPop(out var parent))
         {
             foreach (var entry in await drive.ListAsync(parent.Uri, cancel))
@@ -132,6 +132,7 @@ internal sealed class PairInventory
                 cancel.ThrowIfCancellationRequested();
                 if (Reserved(entry.Name))
                 {
+                    inventory.Excluded.Add(Path.Combine(parent.Key, entry.Name));
                     continue;
                 }
 

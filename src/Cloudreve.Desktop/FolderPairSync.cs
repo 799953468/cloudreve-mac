@@ -29,7 +29,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
             var rules = new PairIgnoreRules(store.ReadRules(pair));
             var local = await PairInventory.ReadLocalAsync(pair, rules, cancel);
             await VerifyRemoteRootAsync(cancel);
-            var remote = await PairInventory.ReadRemoteAsync(pair, drive, rules, cancel);
+            var remote = await PairInventory.ReadRemoteAsync(pair.Remote, "", drive, rules, cancel);
             await VerifyRemoteRootAsync(cancel);
             FolderPairStore.Verify(pair);
 
@@ -37,11 +37,13 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
             var conflicts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var choices = new List<FileConflict>();
             var blocked = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var directoryTrash = new List<PairNode>();
+            var trashedDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             int uploaded = 0, downloaded = 0, removed = 0;
             bool dirty = false;
             try
             {
-                dirty = await SyncDirectoriesAsync(local, remote, baseline, rules, conflicts, blocked, cancel);
+                dirty = await SyncDirectoriesAsync(local, remote, baseline, rules, conflicts, blocked, directoryTrash, cancel);
                 dirty |= await ApplyFileMovesAsync(local, remote, baseline, rules, conflicts, blocked, cancel);
                 blocked.UnionWith(conflicts);
                 var keys = baseline.Keys.Concat(local.Nodes.Keys).Concat(remote.Nodes.Keys).Distinct(StringComparer.OrdinalIgnoreCase)
@@ -165,6 +167,20 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                     dirty = true;
                     activity?.Finish(UiText.Get("完成"));
                 }
+
+                // These trees were blocked during the file pass. Trash only after rechecking their contents.
+                foreach (var directory in directoryTrash)
+                {
+                    if (await TryTrashDirectoryAsync(directory, baseline, rules, cancel))
+                    {
+                        trashedDirectories.Add(directory.Key);
+                        removed++;
+                    }
+                    else
+                    {
+                        conflicts.Add(directory.Key);
+                    }
+                }
             }
             catch (OperationCanceledException) when (cancel.IsCancellationRequested)
             {
@@ -178,7 +194,15 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
             }
             finally
             {
-                if (dirty)
+                if (trashedDirectories.Count > 0)
+                {
+                    foreach (string key in baseline.Keys.Where(key => BlockedPath(trashedDirectories, key)).ToArray())
+                    {
+                        baseline.Remove(key);
+                    }
+                }
+
+                if (dirty || trashedDirectories.Count > 0)
                 {
                     store.SaveBaseline(pair, baseline);
                 }
