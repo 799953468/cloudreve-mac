@@ -13,32 +13,35 @@ internal sealed partial class WorkspaceWindow : Window
     private readonly CancellationTokenSource shutdown = new();
     private readonly SemaphoreSlim operations = new(1, 1);
     private readonly Stack<string> history = new();
+    private readonly SessionFileStore sessions;
+    private readonly object sessionGate = new();
     private CancellationTokenSource? watching;
     private DriveSession? account;
     private DriveClient? drive;
     private DesktopLogin? pending;
     private string directory = "";
     private bool busy;
-    private bool vaultReady;
+    private bool restoreAttempted;
     internal event Action<string, bool>? StatusChanged;
 
-    internal WorkspaceWindow() : this(SessionVault.Load)
+    internal WorkspaceWindow() : this(SessionFileStore.OpenDefault())
     {
     }
 
-    internal WorkspaceWindow(Func<DriveSession?> restore, HttpMessageHandler? siteTransport = null, string? pairSettings = null)
+    internal WorkspaceWindow(SessionFileStore sessions, HttpMessageHandler? siteTransport = null)
     {
+        this.sessions = sessions;
         api = new HttpClient(siteTransport ?? new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
-        settingsRoot = pairSettings ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Application Support", "Cloudreve", "folder-pairs");
+        settingsRoot = Path.Combine(sessions.DirectoryPath, "folder-pairs");
         InitializeComponent();
         Opened += async (_, _) =>
         {
-            if (!vaultReady)
+            if (!restoreAttempted)
             {
                 await RunAsync("Restore session", async () =>
                 {
-                    var saved = restore();
-                    vaultReady = true;
+                    restoreAttempted = true;
+                    var saved = sessions.Load();
                     if (saved != null)
                     {
                         Bind(saved);
@@ -79,7 +82,11 @@ internal sealed partial class WorkspaceWindow : Window
             await RunAsync("Disconnect drive", async () =>
             {
                 await UnpairAsync();
-                SessionVault.Forget();
+                lock (sessionGate)
+                {
+                    sessions.Forget();
+                    activeBinding = null;
+                }
                 StopWatching();
                 pending = null;
                 drive = null;
@@ -121,23 +128,34 @@ internal sealed partial class WorkspaceWindow : Window
             string serverUser = await verifying.UserIdAsync(shutdown.Token);
             candidate = DesktopLogin.VerifyBinding(candidate, serverUser, account);
             await StopPairLoopAsync();
-            SessionVault.Save(candidate);
-            Bind(candidate);
+            Bind(candidate, save: true);
             await LoadAsync(directory);
         });
     }
 
-    private void Bind(DriveSession saved)
+    private void Bind(DriveSession saved, bool save = false)
     {
         StopWatching();
-        account = saved;
         var binding = new object();
-        activeBinding = binding;
+        lock (sessionGate)
+        {
+            if (save)
+            {
+                sessions.Save(saved);
+            }
+
+            activeBinding = binding;
+        }
+
+        account = saved;
         drive = new DriveClient(api, storage, saved, updated =>
         {
-            if (drive != null && activeBinding == binding)
+            lock (sessionGate)
             {
-                SessionVault.Save(updated);
+                if (activeBinding == binding)
+                {
+                    sessions.Save(updated);
+                }
             }
         });
         Endpoint.Text = saved.Site;
@@ -298,7 +316,7 @@ internal sealed partial class WorkspaceWindow : Window
         SetupHint.Text = waiting ? "请在系统浏览器中完成站点授权。" : "输入 Cloudreve 站点地址，在浏览器中完成授权。";
         Endpoint.IsEnabled = !busy && account == null;
         ConnectButton.Content = waiting ? "重新发起授权" : "连接云盘";
-        ConnectButton.IsEnabled = Setup.IsVisible && vaultReady && !busy && !string.IsNullOrWhiteSpace(Endpoint.Text);
+        ConnectButton.IsEnabled = Setup.IsVisible && restoreAttempted && !busy && !string.IsNullOrWhiteSpace(Endpoint.Text);
         CancelLogin.IsVisible = waiting;
         CancelLogin.IsEnabled = !busy;
         bool ready = !busy && drive != null;
@@ -328,7 +346,10 @@ internal sealed partial class WorkspaceWindow : Window
     internal void Stop()
     {
         pending = null;
-        activeBinding = null;
+        lock (sessionGate)
+        {
+            activeBinding = null;
+        }
         shutdown.Cancel();
         StopWatching();
         api.Dispose();

@@ -5,6 +5,7 @@ using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
 using Avalonia.Headless;
+using Avalonia.Interactivity;
 using Avalonia.Themes.Fluent;
 using Avalonia.Media;
 using Avalonia.Styling;
@@ -28,8 +29,21 @@ public sealed class TestApplication : Application
     }
 }
 
-public sealed class WindowTests
+public sealed class WindowTests : IDisposable
 {
+    private readonly DirectoryInfo temp = Directory.CreateTempSubdirectory("cloudreve-window-");
+    private readonly SessionFileStore sessions;
+
+    public WindowTests()
+    {
+        sessions = new SessionFileStore(Path.Combine(temp.FullName, "settings"));
+    }
+
+    public void Dispose()
+    {
+        temp.Delete(true);
+    }
+
     [Fact]
     public async Task ConnectionFormCentersTextAtWindowsControlHeights()
     {
@@ -39,9 +53,9 @@ public sealed class WindowTests
         }
     }
 
-    private static void CheckConnectionForm()
+    private void CheckConnectionForm()
     {
-        var window = new WorkspaceWindow(() => null);
+        var window = new WorkspaceWindow(sessions);
         window.Show();
         try
         {
@@ -91,23 +105,36 @@ public sealed class WindowTests
         Dispatcher.UIThread.RunJobs();
     }
 
-    [Fact]
-    public async Task DisconnectedDriveCannotBrowseOrDownload()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DisconnectedDriveCanConnectButCannotBrowseOrDownload(bool damagedFile)
     {
+        if (damagedFile)
+        {
+            Directory.CreateDirectory(sessions.DirectoryPath);
+            File.WriteAllText(Path.Combine(sessions.DirectoryPath, "drives.json"), "{");
+        }
+
         await using (var ui = HeadlessUnitTestSession.StartNew(typeof(TestApplication)))
         {
-            await ui.Dispatch(CheckDisconnectedDrive, TestContext.Current.CancellationToken);
+            await ui.Dispatch(() => { CheckDisconnectedDrive(damagedFile); }, TestContext.Current.CancellationToken);
         }
     }
 
-    private static void CheckDisconnectedDrive()
+    private void CheckDisconnectedDrive(bool damagedFile)
     {
-        var window = new WorkspaceWindow(() => null);
+        var window = new WorkspaceWindow(sessions);
         window.Show();
         try
         {
             Assert.True(window.Setup.IsVisible);
             Assert.False(window.Workspace.IsVisible);
+            if (damagedFile)
+            {
+                Assert.Contains("重新连接", window.StatusText.Text);
+            }
+
             Assert.False(window.ConnectButton.IsEnabled);
             window.Endpoint.Text = "https://cloud.example.com";
             Dispatcher.UIThread.RunJobs();
@@ -145,58 +172,88 @@ public sealed class WindowTests
     [Fact]
     public async Task RestoredPairScansWhileHiddenAndQuitsCleanly()
     {
-        var temp = Directory.CreateTempSubdirectory("cloudreve-window-");
-        try
+        string settings = Path.Combine(sessions.DirectoryPath, "folder-pairs");
+        var session = new DriveSession("https://site.example/", "drive", "Work", "cloudreve://my/", "user", "access", "refresh",
+            DateTimeOffset.UtcNow.AddMinutes(10), DateTimeOffset.UtcNow.AddHours(1));
+        sessions.Save(session);
+        var store = new FolderPairStore(settings, session);
+        var pair = store.Create(temp.CreateSubdirectory("local").FullName, session.Root, "root-id");
+        var transport = new DirectoryHandler { Empty = true };
+        await using (var ui = HeadlessUnitTestSession.StartNew(typeof(TestApplication)))
         {
-            string settings = Path.Combine(temp.FullName, "settings");
-            var session = new DriveSession("https://site.example/", "drive", "Work", "cloudreve://my/", "user", "access", "refresh",
-                DateTimeOffset.UtcNow.AddMinutes(10), DateTimeOffset.UtcNow.AddHours(1));
-            var store = new FolderPairStore(settings, session);
-            var pair = store.Create(temp.CreateSubdirectory("local").FullName, session.Root, "root-id");
-            var transport = new DirectoryHandler { Empty = true };
-            await using (var ui = HeadlessUnitTestSession.StartNew(typeof(TestApplication)))
+            var cancel = TestContext.Current.CancellationToken;
+            await ui.Dispatch(async () =>
             {
-                var cancel = TestContext.Current.CancellationToken;
-                await ui.Dispatch(async () =>
+                var window = new WorkspaceWindow(sessions, transport);
+                try
                 {
-                    var window = new WorkspaceWindow(() => session, transport, settings);
-                    try
+                    window.Show();
+                    await window.RefreshAsync();
+                    Assert.Contains(pair.Remote, window.PairLocation.Text);
+                    Assert.True(window.SyncNowButton.IsVisible);
+                    window.Hide();
+                    await transport.RootChecked.Task.WaitAsync(TimeSpan.FromSeconds(5), cancel);
+                    await window.PrepareToQuitAsync();
+                    Assert.Equal(pair, store.Load());
+                    using (store.Lock(pair))
                     {
-                        window.Show();
-                        await window.RefreshAsync();
-                        Assert.Contains(pair.Remote, window.PairLocation.Text);
-                        Assert.True(window.SyncNowButton.IsVisible);
-                        window.Hide();
-                        await transport.RootChecked.Task.WaitAsync(TimeSpan.FromSeconds(5), cancel);
-                        await window.PrepareToQuitAsync();
-                        Assert.Equal(pair, store.Load());
-                        using (store.Lock(pair))
-                        {
-                            FolderPairStore.Verify(pair);
-                        }
+                        FolderPairStore.Verify(pair);
                     }
-                    finally
-                    {
-                        window.Close();
-                        window.Stop();
-                    }
+                }
+                finally
+                {
+                    window.Close();
+                    window.Stop();
+                }
 
-                    return true;
-                }, cancel);
-            }
-        }
-        finally
-        {
-            temp.Delete(true);
+                return true;
+            }, cancel);
         }
     }
 
-    private static async Task CheckRestoredDriveAsync(bool dark)
+    [Fact]
+    public async Task OpeningRotatesExpiredCredentialsAndDisconnectRemovesThem()
+    {
+        var session = new DriveSession("https://site.example/", "drive", "Work", "cloudreve://my/", "user", "access", "refresh",
+            DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddHours(1));
+        sessions.Save(session);
+        await using (var ui = HeadlessUnitTestSession.StartNew(typeof(TestApplication)))
+        {
+            await ui.Dispatch(async () =>
+            {
+                var window = new WorkspaceWindow(sessions, new DirectoryHandler());
+                try
+                {
+                    window.Show();
+                    await window.RefreshAsync();
+                    var reopened = new SessionFileStore(sessions.DirectoryPath);
+                    var rotated = Assert.IsType<DriveSession>(reopened.Load());
+                    Assert.Equal("new-refresh", rotated.RefreshToken);
+                    Assert.Equal("new-access", rotated.AccessToken);
+
+                    window.DisconnectButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    await window.RefreshAsync();
+                    Assert.True(window.Setup.IsVisible);
+                    Assert.Null(reopened.Load());
+                }
+                finally
+                {
+                    window.Close();
+                    window.Stop();
+                }
+
+                return true;
+            }, TestContext.Current.CancellationToken);
+        }
+    }
+
+    private async Task CheckRestoredDriveAsync(bool dark)
     {
         var session = new DriveSession("https://site.example/", "drive", "工作云盘", "cloudreve://my/", "user", "access", "refresh",
             DateTimeOffset.UtcNow.AddMinutes(10), DateTimeOffset.UtcNow.AddHours(1));
         var transport = new DirectoryHandler();
-        var window = new WorkspaceWindow(() => session, transport)
+        sessions.Save(session);
+        var window = new WorkspaceWindow(sessions, transport)
         {
             Width = 520, Height = 420, RequestedThemeVariant = dark ? ThemeVariant.Dark : ThemeVariant.Light
         };
@@ -248,7 +305,22 @@ public sealed class WindowTests
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            if (request.RequestUri!.AbsolutePath == "/api/v4/file/events")
+            if (request.RequestUri!.AbsolutePath == "/api/v4/session/token/refresh")
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new
+                    {
+                        code = 0, data = new
+                        {
+                            access_token = "new-access", refresh_token = "new-refresh",
+                            access_expires = DateTimeOffset.UtcNow.AddHours(1), refresh_expires = DateTimeOffset.UtcNow.AddDays(1)
+                        }
+                    })
+                };
+            }
+
+            if (request.RequestUri.AbsolutePath == "/api/v4/file/events")
             {
                 await Task.Delay(Timeout.Infinite, cancellationToken);
             }
