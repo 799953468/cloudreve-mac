@@ -176,7 +176,7 @@ internal sealed partial class SettingsWindow : Window
             var delete = ActionButton(DesktopText.Get("settings.deleteDrive"), async () =>
             {
                 string message = DesktopText.Get("settings.deleteDriveConfirm").Replace("{{name}}", name);
-                if (await PromptAsync("settings.deleteDrive", message, null) != null)
+                if (await ConfirmDeleteAsync(message))
                 {
                     await host.RemoveAsync(drive);
                 }
@@ -229,45 +229,25 @@ internal sealed partial class SettingsWindow : Window
 
     private async Task EditRulesAsync(MountedDrive drive)
     {
-        var editor = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 140, Text = drive.PairStore.ReadRules(drive.Pair!) };
-        await PromptAsync("settings.ignorePatternsTitle", DesktopText.Get("settings.ignorePatternsDescription"), editor, drive.SaveRules);
+        var dialog = new IgnoreRulesWindow(drive.Account.Name, drive.PairStore.ReadRules(drive.Pair!), drive.SaveRules);
+        await dialog.ShowDialog(this);
     }
 
-    private async Task<string?> PromptAsync(string title, string message, TextBox? editor, Action<string>? save = null)
+    private async Task<bool> ConfirmDeleteAsync(string message)
     {
         var body = new StackPanel { Margin = new Thickness(20), Spacing = 12 };
         var dialog = new Window
-            { Title = DesktopText.Get(title), Width = 440, SizeToContent = SizeToContent.Height, CanResize = false, WindowStartupLocation = WindowStartupLocation.CenterOwner, Content = body };
+            { Title = DesktopText.Get("settings.deleteDrive"), Width = 440, SizeToContent = SizeToContent.Height, CanResize = false, WindowStartupLocation = WindowStartupLocation.CenterOwner, Content = body };
         body.Children.Add(new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap });
-        if (editor != null)
-        {
-            body.Children.Add(editor);
-        }
-
-        var error = new TextBlock { IsVisible = false, TextWrapping = TextWrapping.Wrap };
-        body.Children.Add(error);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right };
         body.Children.Add(buttons);
         var cancel = new Button { Content = DesktopText.Get("settings.cancel"), IsCancel = true };
-        var ok = new Button { Content = DesktopText.Get(editor == null ? "settings.deleteDrive" : "settings.save") };
-        cancel.Click += (_, _) => { dialog.Close(); };
-        ok.Click += (_, _) =>
-        {
-            string text = editor?.Text ?? "";
-            try
-            {
-                save?.Invoke(text);
-                dialog.Close(text);
-            }
-            catch (Exception ex)
-            {
-                error.Text = ex.Message;
-                error.IsVisible = true;
-            }
-        };
+        var ok = new Button { Content = dialog.Title };
+        cancel.Click += (_, _) => { dialog.Close(false); };
+        ok.Click += (_, _) => { dialog.Close(true); };
         buttons.Children.Add(cancel);
         buttons.Children.Add(ok);
-        return await dialog.ShowDialog<string?>(this);
+        return await dialog.ShowDialog<bool>(this);
     }
 
     private void BuildGeneral()

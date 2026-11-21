@@ -257,6 +257,73 @@ public sealed class WindowTests : IDisposable
         }, TestContext.Current.CancellationToken);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task IgnoreRulesDialogKeepsDraftUntilSaved(bool dark)
+    {
+        await using var ui = HeadlessUnitTestSession.StartNew(typeof(TestApplication));
+        await ui.Dispatch(async () =>
+        {
+            string saved = "*.log";
+            void SaveRules(string text)
+            {
+                _ = new PairIgnoreRules(text);
+                saved = text;
+            }
+
+            var owner = new Window();
+            owner.Show();
+            try
+            {
+                var dialog = new IgnoreRulesWindow("Work", saved, SaveRules)
+                {
+                    RequestedThemeVariant = dark ? ThemeVariant.Dark : ThemeVariant.Light
+                };
+                var closed = dialog.ShowDialog(owner);
+                Assert.Equal(saved, dialog.RulesEditor.Text);
+                Assert.True(dialog.RulesEditor.IsFocused);
+                dialog.RulesEditor.CaretIndex = saved.Length;
+                dialog.KeyPressQwerty(PhysicalKey.Enter, RawInputModifiers.None);
+                dialog.KeyReleaseQwerty(PhysicalKey.Enter, RawInputModifiers.None);
+                Assert.Equal("*.log\n", dialog.RulesEditor.Text);
+                Assert.False(closed.IsCompleted);
+                dialog.RulesEditor.Text = "*.log\nnode_modules/\n*.tmp";
+                Capture(dialog, dark ? "ignore-rules-dark" : "ignore-rules");
+
+                dialog.Width = dialog.MinWidth;
+                dialog.Height = dialog.MinHeight;
+                string invalid = string.Join('\n', Enumerable.Repeat("*.tmp", 80)) + "\n[abc]";
+                dialog.RulesEditor.Text = invalid;
+                Click(dialog.SaveButton);
+                Assert.True(dialog.SaveError.IsVisible);
+                Assert.False(closed.IsCompleted);
+                Assert.Equal(invalid, dialog.RulesEditor.Text);
+                Assert.Equal("*.log", saved);
+                dialog.UpdateLayout();
+                var errorBottom = dialog.SaveError.TranslatePoint(new Point(0, dialog.SaveError.Bounds.Height), dialog)!.Value.Y;
+                var saveTop = dialog.SaveButton.TranslatePoint(default, dialog)!.Value.Y;
+                Assert.True(errorBottom <= saveTop && saveTop + dialog.SaveButton.Bounds.Height <= dialog.ClientSize.Height);
+
+                dialog.RulesEditor.Text = "*.tmp\n!important.tmp";
+                Click(dialog.SaveButton);
+                await closed;
+                Assert.Equal("*.tmp\n!important.tmp", saved);
+
+                var reopened = new IgnoreRulesWindow("Work", saved, SaveRules);
+                var cancelled = reopened.ShowDialog(owner);
+                reopened.RulesEditor.Text = string.Empty;
+                reopened.KeyPressQwerty(PhysicalKey.Escape, RawInputModifiers.None);
+                Assert.True(cancelled.IsCompleted);
+                Assert.Equal("*.tmp\n!important.tmp", saved);
+            }
+            finally
+            {
+                owner.Close();
+            }
+        }, TestContext.Current.CancellationToken);
+    }
+
     private static void Capture(TopLevel window, string name)
     {
         if (Environment.GetEnvironmentVariable("CLOUDREVE_UI_CAPTURES") is not { Length: > 0 } dir)
