@@ -52,11 +52,23 @@ public sealed class DesktopLogTests
                 var requestError = new HttpRequestException("https://example.invalid/download?token=private", null, HttpStatusCode.Forbidden);
                 log.WriteFailure(LogEventLevel.Warning, "Download file", requestError);
                 log.WriteFailure(LogEventLevel.Error, "Restore session", new IOException("/private/user/document.txt"));
+                var file = new DriveEntry("private", "cloudreve://my/private", false, 10);
+                var missing = Assert.Throws<InvalidDataException>(() => PairInventory.RequireVersion(file, file.Uri));
+                var mismatch = Assert.Throws<InvalidDataException>(() => PairInventory.RequireVersion(file with { Version = "private-version" }, "cloudreve://my/elsewhere"));
+                var unsupported = Assert.Throws<InvalidDataException>(() => PairInventory.RequireVersion(file with { SkipSync = true }, file.Uri));
+                log.WriteFailure(LogEventLevel.Warning, "Synchronize folder pair", missing);
+                log.WriteFailure(LogEventLevel.Warning, "Synchronize folder pair", mismatch);
+                log.WriteFailure(LogEventLevel.Warning, "Synchronize folder pair", unsupported);
+                var untrusted = new InvalidDataException("private-message") { Data = { [nameof(RemoteVersionFailure)] = "private-data" } };
+                log.WriteFailure(LogEventLevel.Warning, "Synchronize folder pair", untrusted);
             }
 
             string contents = File.ReadAllText(Assert.Single(Directory.GetFiles(directory, "desktop-*.log")));
             Assert.Contains("Download file failed: HttpRequestException (HTTP 403)", contents);
             Assert.Contains("Restore session failed: IOException", contents);
+            Assert.Contains("(remote version: MissingVersion)", contents);
+            Assert.Contains("(remote version: UriMismatch)", contents);
+            Assert.Contains("(remote version: UnsupportedEntry)", contents);
             Assert.DoesNotContain("example.invalid", contents);
             Assert.DoesNotContain("private", contents);
         }

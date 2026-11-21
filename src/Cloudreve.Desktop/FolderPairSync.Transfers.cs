@@ -70,9 +70,24 @@ internal sealed partial class FolderPairSync
                         target = await ResolveRemoteAsync(key, file, false, cancel, requireParents: true);
                     }
 
+                    string path = Path.Combine(pair.Local, key);
                     await RequireLocalAsync(key, here!.Hash, cancel);
-                    await drive.UploadAsync(Path.Combine(pair.Local, key), target, file, cancel, progress, files, saved);
-                    file = await PairInventory.ReadVersionAsync(drive, target, cancel);
+                    await drive.UploadAsync(path, target, file, cancel, progress, files, saved);
+                    var uploaded = await drive.StatAsync(target, cancel);
+                    // A resumed local/relay upload has no separate finalize call. Only replace our own stranded placeholder.
+                    if (saved?.StorageKind == "local" && uploaded.UploadSessionId == saved.SessionId &&
+                        PairInventory.SameUri(target, uploaded.Uri) && MatchesPreviousVersion(uploaded, file))
+                    {
+                        await VerifyRemoteRootAsync(cancel);
+                        await drive.CancelUploadAsync(target, saved.SessionId, cancel);
+                        File.Delete(files.UploadPath);
+                        target = await ResolveRemoteAsync(key, file, false, cancel, requireParents: true);
+                        await RequireLocalAsync(key, here.Hash, cancel);
+                        await drive.UploadAsync(path, target, file, cancel, progress, files);
+                        uploaded = await drive.StatAsync(target, cancel);
+                    }
+
+                    file = PairInventory.RequireVersion(uploaded, target);
                     if (await CompareRemoteHashAsync(key, file, here.Hash, progress, cancel) != here.Hash)
                     {
                         throw new IOException(UiText.Get("云端回读与上传前的文件内容不同，未记录为已同步。"));

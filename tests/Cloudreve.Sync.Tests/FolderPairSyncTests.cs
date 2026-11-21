@@ -812,6 +812,48 @@ public sealed class FolderPairSyncTests : IDisposable
         Assert.Equal(2, new SyncActivity(cache).ChangesSince(-1)!.Recent.Length);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task RecoversAnAcknowledgedLocalUploadOnlyWhileItOwnsThePlaceholder(bool updateExisting, bool foreign)
+    {
+        const string key = "upload";
+        const string uri = Root + "/" + key;
+        if (updateExisting)
+        {
+            site.Put(uri, "old");
+            await RunAsync();
+        }
+
+        var previous = store.ReadBaseline(pair).GetValueOrDefault(key);
+        File.WriteAllText(Path.Combine(pair.Local, key), "new content");
+        site.KeepUploadPlaceholder = true;
+        var failure = await Assert.ThrowsAsync<InvalidDataException>(() => RunAsync());
+        Assert.Equal(RemoteVersionFailure.UploadStillPending, failure.Data[nameof(RemoteVersionFailure)]);
+        Assert.Equal(previous, store.ReadBaseline(pair).GetValueOrDefault(key));
+        Assert.Single(site.Parts);
+
+        site.KeepUploadPlaceholder = false;
+        site.ForeignPlaceholder = foreign;
+        var result = await RunAsync();
+        if (foreign)
+        {
+            Assert.Contains(key, result.Conflicts);
+            Assert.Single(site.Parts);
+            Assert.Equal(0, site.SessionsCancelled);
+            Assert.Equal(previous, store.ReadBaseline(pair).GetValueOrDefault(key));
+            return;
+        }
+
+        Assert.Equal(1, result.Uploaded);
+        Assert.Equal(1, site.SessionsCancelled);
+        Assert.Equal(2, site.SessionsCreated);
+        Assert.Equal("new content", site.Files[uri].Text);
+        Assert.Equal(site.Files[uri].Version, store.ReadBaseline(pair)[key].RemoteVersion);
+        Assert.Empty(TransferQueue.Open(store.TransferDirectory(pair)).Entries);
+    }
+
     [Fact]
     public async Task RecoversVerifiedFileBeforeReplanningEditsMadeWhileStopped()
     {
@@ -1034,7 +1076,7 @@ public sealed class FolderPairSyncTests : IDisposable
         internal bool Incomplete, Truncate, OmitListedVersions;
         internal string? ReadbackOverride;
         internal int? DownloadLimit;
-        internal bool AcceptRanges, BadRange, RejectRange, ForeignPlaceholder;
+        internal bool AcceptRanges, BadRange, RejectRange, ForeignPlaceholder, KeepUploadPlaceholder;
         internal readonly List<long?> Ranges = [];
         internal int UploadChunkSize, SessionsCreated, SessionsCancelled;
         internal int? InterruptPart;
@@ -1178,7 +1220,7 @@ public sealed class FolderPairSyncTests : IDisposable
                 parts.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
                 string target = uploads[id];
                 string text = string.Concat(parts);
-                if (Encoding.UTF8.GetByteCount(text) == uploadLengths[id])
+                if (!KeepUploadPlaceholder && Encoding.UTF8.GetByteCount(text) == uploadLengths[id])
                 {
                     Put(target, text);
                     placeholders.Remove(target);

@@ -10,6 +10,21 @@ internal sealed record QueuedFile(Guid Id, FileTransfer File);
 internal sealed record UploadCheckpoint(JsonElement Ticket, int NextPart, List<string> Tags, bool Merged = false)
 {
     internal string SessionId { get { return DesktopLogin.Required(Ticket, "session_id"); } }
+
+    internal string StorageKind
+    {
+        get
+        {
+            if (Ticket.TryGetProperty("storage_policy", out var policy) && policy.ValueKind == JsonValueKind.Object &&
+                !(policy.TryGetProperty("relay", out var relay) && relay.ValueKind == JsonValueKind.True))
+            {
+                return DesktopLogin.Required(policy, "type");
+            }
+
+            return "local";
+        }
+    }
+
     internal bool Expired
     {
         get

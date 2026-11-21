@@ -113,12 +113,7 @@ internal sealed partial class DriveClient
     {
         var ticket = checkpoint.Ticket;
         string id = checkpoint.SessionId;
-        string kind = "local";
-        if (ticket.TryGetProperty("storage_policy", out var policy) && policy.ValueKind == JsonValueKind.Object &&
-            !(policy.TryGetProperty("relay", out var relay) && relay.ValueKind == JsonValueKind.True))
-        {
-            kind = DesktopLogin.Required(policy, "type");
-        }
+        string kind = checkpoint.StorageKind;
 
         string[] urls = ticket.TryGetProperty("upload_urls", out var addresses) && addresses.ValueKind == JsonValueKind.Array
             ? addresses.EnumerateArray().Select(address => address.GetString() ?? "").ToArray()

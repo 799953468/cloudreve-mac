@@ -5,6 +5,14 @@ namespace Cloudreve.Desktop;
 
 internal sealed record PairNode(string Key, NodeKind Kind, string? Hash = null, DriveEntry? Remote = null, string? LocalId = null, uint LocalGeneration = 0);
 
+internal enum RemoteVersionFailure
+{
+    UploadStillPending,
+    UnsupportedEntry,
+    MissingVersion,
+    UriMismatch
+}
+
 internal sealed class PairInventory
 {
     internal const string Recovery = ".cloudreve-recovery";
@@ -157,10 +165,35 @@ internal sealed class PairInventory
 
     internal static async Task<DriveEntry> ReadVersionAsync(DriveClient drive, string target, CancellationToken cancel)
     {
-        var file = await drive.StatAsync(target, cancel);
-        if (file.SkipSync || file.IsFolder || string.IsNullOrEmpty(file.Version) || !SameUri(file.Uri, target))
+        return RequireVersion(await drive.StatAsync(target, cancel), target);
+    }
+
+    internal static DriveEntry RequireVersion(DriveEntry file, string target)
+    {
+        RemoteVersionFailure? reason = null;
+        if (file.UploadSessionId != null)
         {
-            throw new InvalidDataException(UiText.Get("无法验证云端文件版本。"));
+            reason = RemoteVersionFailure.UploadStillPending;
+        }
+        else if (file.SkipSync || file.IsFolder)
+        {
+            reason = RemoteVersionFailure.UnsupportedEntry;
+        }
+        else if (string.IsNullOrEmpty(file.Version))
+        {
+            reason = RemoteVersionFailure.MissingVersion;
+        }
+        else if (!SameUri(file.Uri, target))
+        {
+            reason = RemoteVersionFailure.UriMismatch;
+        }
+
+        if (reason.HasValue)
+        {
+            throw new InvalidDataException(UiText.Get("无法验证云端文件版本。"))
+            {
+                Data = { [nameof(RemoteVersionFailure)] = reason.Value }
+            };
         }
 
         return file;

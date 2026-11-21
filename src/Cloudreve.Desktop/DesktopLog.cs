@@ -29,6 +29,10 @@ internal static class DesktopLog
         {
             logger.Write(level, "{Operation} failed: {ErrorType} (HTTP {StatusCode})", operation, errorType, (int)statusCode);
         }
+        else if (exception is InvalidDataException && exception.Data[nameof(RemoteVersionFailure)] is RemoteVersionFailure reason)
+        {
+            logger.Write(level, "{Operation} failed: {ErrorType} (remote version: {Reason:l})", operation, errorType, reason.ToString());
+        }
         else
         {
             logger.Write(level, "{Operation} failed: {ErrorType}", operation, errorType);
