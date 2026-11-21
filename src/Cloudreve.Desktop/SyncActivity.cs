@@ -15,7 +15,8 @@ internal sealed record ActivityTransfer(long Id, string Phase, long Completed, l
 }
 
 internal sealed record ActiveFile(ActivityEntry Entry, ActivityTransfer? Transfer);
-internal sealed record ActivitySnapshot(long Revision, ActiveFile[] Active, ActivityEntry[] Recent, string[] Waiting, int WaitingCount);
+internal sealed record WaitingFile(string Key, SyncAction Action);
+internal sealed record ActivitySnapshot(long Revision, ActiveFile[] Active, ActivityEntry[] Recent, WaitingFile[] Waiting, int WaitingCount);
 
 internal sealed class SyncActivity
 {
@@ -24,7 +25,8 @@ internal sealed class SyncActivity
     {
         internal readonly HashSet<SyncActivity> Active = [];
         internal readonly Queue<ActivityEntry> Recent = new();
-        internal readonly HashSet<string> Waiting = [];
+        internal readonly LinkedList<WaitingFile> Waiting = new();
+        internal readonly Dictionary<string, LinkedListNode<WaitingFile>> WaitingByKey = new(StringComparer.Ordinal);
         internal string? HistoryPath;
         internal long Revision;
     }
@@ -57,9 +59,11 @@ internal sealed class SyncActivity
         lock (state)
         {
             state.Waiting.Clear();
+            state.WaitingByKey.Clear();
             foreach (var entry in entries)
             {
-                state.Waiting.Add(entry.File.Key);
+                var file = new WaitingFile(entry.File.Key, entry.File.Action);
+                state.WaitingByKey.Add(file.Key, state.Waiting.AddLast(file));
             }
 
             state.Revision++;
@@ -81,7 +85,11 @@ internal sealed class SyncActivity
         lock (state)
         {
             current = new ActivityEntry(DateTime.Now, operation, key, UiText.Get("处理中"));
-            state.Waiting.Remove(key);
+            if (state.WaitingByKey.Remove(key, out var waiting))
+            {
+                state.Waiting.Remove(waiting);
+            }
+
             state.Active.Add(this);
             state.Revision++;
         }

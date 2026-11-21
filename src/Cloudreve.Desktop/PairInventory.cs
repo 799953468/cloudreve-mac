@@ -73,48 +73,68 @@ internal sealed class PairInventory
         return new PairNode(key, NodeKind.File, hash, LocalId: version?.LocalId ?? MacFile.Identity(path), LocalGeneration: version?.Generation ?? 0);
     }
 
-    internal static async Task<PairInventory> ReadLocalAsync(FolderPair pair, PairIgnoreRules rules, IReadOnlyDictionary<string, FileBaseline> baseline,
-        CancellationToken cancel)
+    private sealed record LocalScanEntry(string Key, PairNode? Node, List<string>? Children = null);
+
+    private static IEnumerable<string> LocalChildren(string directory, CancellationToken cancel)
     {
-        var inventory = new PairInventory();
-        var pending = new Stack<string>();
-        pending.Push(pair.Local);
-        while (pending.TryPop(out string? parent))
+        cancel.ThrowIfCancellationRequested();
+        FolderPairStore.CheckDirectory(directory);
+        foreach (string path in Directory.EnumerateFileSystemEntries(directory))
         {
-            FolderPairStore.CheckDirectory(parent);
-            foreach (string path in Directory.EnumerateFileSystemEntries(parent))
+            cancel.ThrowIfCancellationRequested();
+            if (!Reserved(Path.GetFileName(path)))
             {
-                cancel.ThrowIfCancellationRequested();
-                if (Reserved(Path.GetFileName(path)))
-                {
-                    continue;
-                }
-
-                string key = Path.GetRelativePath(pair.Local, path).Normalize();
-                ValidateKey(key);
-                var kind = MacFile.Inspect(path) ?? throw new IOException(UiText.Get("扫描期间本地目录已变化。"));
-                if (rules.Excludes(key, kind == NodeKind.Directory))
-                {
-                    inventory.Excluded.Add(key);
-                    continue;
-                }
-
-                if (kind == NodeKind.File)
-                {
-                    baseline.TryGetValue(key, out var previous);
-                    inventory.Add(await ReadLocalFileAsync(key, path, previous, cancel));
-                    continue;
-                }
-
-                string? localId = kind == NodeKind.Directory ? MacFile.Identity(path) : null;
-                if (inventory.Add(new PairNode(key, kind, LocalId: localId)) && kind == NodeKind.Directory)
-                {
-                    pending.Push(path);
-                }
+                yield return path;
             }
         }
+    }
 
+    internal static async Task<PairInventory> ReadLocalAsync(FolderPair pair, PairIgnoreRules rules, IReadOnlyDictionary<string, FileBaseline> baseline,
+        AdaptiveWorkQueue scan, CancellationToken cancel)
+    {
+        var inventory = new PairInventory();
+        // Enumeration and cached metadata reads are synchronous even when no file needs hashing.
+        await scan.TraverseAsync(LocalChildren(pair.Local, cancel), (path, token) => Task.Run(() => ReadEntryAsync(path, token), token),
+            (entry, enqueue) =>
+            {
+                if (entry.Node == null)
+                {
+                    inventory.Excluded.Add(entry.Key);
+                }
+                else if (inventory.Add(entry.Node) && entry.Children != null)
+                {
+                    foreach (string child in entry.Children)
+                    {
+                        enqueue(child);
+                    }
+                }
+            }, cancel);
         return inventory;
+
+        async Task<LocalScanEntry> ReadEntryAsync(string path, CancellationToken token)
+        {
+            string key = Path.GetRelativePath(pair.Local, path).Normalize();
+            ValidateKey(key);
+            var kind = MacFile.Inspect(path) ?? throw new IOException(UiText.Get("扫描期间本地目录已变化。"));
+            if (rules.Excludes(key, kind == NodeKind.Directory))
+            {
+                return new LocalScanEntry(key, null);
+            }
+
+            if (kind == NodeKind.File)
+            {
+                baseline.TryGetValue(key, out var previous);
+                return new LocalScanEntry(key, await ReadLocalFileAsync(key, path, previous, token));
+            }
+
+            if (kind == NodeKind.Directory)
+            {
+                var directory = new PairNode(key, kind, LocalId: MacFile.Identity(path));
+                return new LocalScanEntry(key, directory, LocalChildren(path, token).ToList());
+            }
+
+            return new LocalScanEntry(key, new PairNode(key, kind));
+        }
     }
 
     internal static bool SameUri(string left, string right)
@@ -146,14 +166,15 @@ internal sealed class PairInventory
         return file;
     }
 
-    internal static async Task<PairInventory> ReadRemoteAsync(string rootUri, string rootKey, DriveClient drive, PairIgnoreRules rules, CancellationToken cancel)
+    internal static async Task<PairInventory> ReadRemoteAsync(string rootUri, string rootKey, DriveClient drive, PairIgnoreRules rules,
+        AdaptiveWorkQueue scan, CancellationToken cancel)
     {
         var inventory = new PairInventory();
-        var pending = new Stack<(string Key, string Uri)>();
-        pending.Push((rootKey, rootUri));
-        while (pending.TryPop(out var parent))
+        var root = (Key: rootKey, Uri: rootUri);
+        await scan.TraverseAsync([root], async (parent, token) => (Parent: parent, Entries: await drive.ListAsync(parent.Uri, token)), (listing, enqueue) =>
         {
-            foreach (var entry in await drive.ListAsync(parent.Uri, cancel))
+            var parent = listing.Parent;
+            foreach (var entry in listing.Entries)
             {
                 cancel.ThrowIfCancellationRequested();
                 if (Reserved(entry.Name))
@@ -172,13 +193,17 @@ internal sealed class PairInventory
                 }
 
                 var kind = entry.SkipSync ? NodeKind.Unsupported : entry.IsFolder ? NodeKind.Directory : NodeKind.File;
-                var file = kind == NodeKind.File && string.IsNullOrEmpty(entry.Version) ? await ReadVersionAsync(drive, entry.Uri, cancel) : entry;
-                if (inventory.Add(new PairNode(key, kind, Remote: file)) && kind == NodeKind.Directory)
+                if (inventory.Add(new PairNode(key, kind, Remote: entry)) && kind == NodeKind.Directory)
                 {
-                    pending.Push((key, entry.Uri));
+                    enqueue((key, entry.Uri));
                 }
             }
-        }
+        }, cancel);
+
+        // Resolve only unambiguous files after listings (including all pages) have passed validation.
+        var missingVersions = inventory.Nodes.Values.Where(node => node.Kind == NodeKind.File && string.IsNullOrEmpty(node.Remote!.Version));
+        await scan.RunAsync(missingVersions, async (node, token) => node with { Remote = await ReadVersionAsync(drive, node.Remote!.Uri, token) },
+            node => { inventory.Nodes[node.Key] = node; }, cancel);
 
         return inventory;
     }

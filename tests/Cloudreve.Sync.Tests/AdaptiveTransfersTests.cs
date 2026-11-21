@@ -7,9 +7,27 @@ namespace Cloudreve.Sync.Tests;
 public sealed class AdaptiveTransfersTests
 {
     [Fact]
+    public async Task ADeepTreeWithOnlyOneChildPerDirectoryDoesNotIncreaseTheWindow()
+    {
+        var scheduler = new AdaptiveWorkQueue();
+        var scanned = new List<int>();
+        await scheduler.TraverseAsync([0], (depth, _) => Task.FromResult(depth), (depth, enqueue) =>
+        {
+            scanned.Add(depth);
+            if (depth < 20)
+            {
+                enqueue(depth + 1);
+            }
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(Enumerable.Range(0, 21), scanned);
+        Assert.Equal(2, scheduler.Limit);
+    }
+
+    [Fact]
     public async Task GrowsWithBacklogWithoutExceedingSixActiveFiles()
     {
-        var scheduler = new AdaptiveTransfers();
+        var scheduler = new AdaptiveWorkQueue();
         int[] items = Enumerable.Range(0, 32).ToArray();
         var started = items.Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).ToArray();
         var release = items.Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).ToArray();
@@ -57,7 +75,7 @@ public sealed class AdaptiveTransfersTests
     [InlineData(HttpStatusCode.ServiceUnavailable)]
     public async Task ThrottlingCancelsAndDrainsPeersBeforeTheNextScan(HttpStatusCode status)
     {
-        var scheduler = new AdaptiveTransfers();
+        var scheduler = new AdaptiveWorkQueue();
         var cancel = TestContext.Current.CancellationToken;
         var bothStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         bool drained = false;

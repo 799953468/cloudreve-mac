@@ -45,6 +45,7 @@
     "recent": "最近",
     "syncingStatus": "正在同步 {{count}} 个文件...",
     "queued": "等待传输（{{count}}）",
+    "queuedMore": "另有 {{count}} 项等待传输",
     "upToDate": "文件已是最新。",
     "waiting": "等待中...",
     "processing": "处理中..."

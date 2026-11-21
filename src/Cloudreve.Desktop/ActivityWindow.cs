@@ -6,12 +6,45 @@ using Avalonia.Threading;
 
 namespace Cloudreve.Desktop;
 
+internal sealed record WaitingRow(string Drive, WaitingFile File)
+{
+    public string FileName { get { return Path.GetFileName(File.Key); } }
+    public bool IsUpload { get { return File.Action == SyncAction.Upload; } }
+    public bool IsDownload { get { return File.Action == SyncAction.Download; } }
+    public bool IsComparison { get { return File.Action == SyncAction.CompareContents; } }
+    public string Location
+    {
+        get
+        {
+            string? parent = Path.GetDirectoryName(File.Key);
+            return string.IsNullOrEmpty(parent) ? Drive : $"{Drive} · {parent}";
+        }
+    }
+
+    public string Operation
+    {
+        get
+        {
+            return File.Action switch
+            {
+                SyncAction.Upload => UiText.Get("上传"),
+                SyncAction.Download => UiText.Get("下载"),
+                SyncAction.CompareContents => UiText.Get("核对内容"),
+                _ => DesktopText.Get("popup.waiting")
+            };
+        }
+    }
+
+    public string Description { get { return $"{Operation} · {Drive} · {File.Key}"; } }
+}
+
 internal sealed partial class ActivityWindow : Window
 {
     private readonly WorkspaceHost host;
     private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly Dictionary<MountedDrive, ActivitySnapshot> snapshots = [];
     private readonly TextDecorationCollection folderUnderline = [new TextDecoration { Location = TextDecorationLocation.Underline }];
+    private WaitingRow[] displayedWaiting = [];
     private MountedDrive? selected;
 
     internal ActivityWindow(WorkspaceHost host)
@@ -106,38 +139,38 @@ internal sealed partial class ActivityWindow : Window
             return;
         }
 
-        Tasks.Children.Clear();
         var active = snapshots.SelectMany(s => s.Value.Active.Select(file => (Drive: s.Key, File: file))).ToArray();
         var recent = snapshots.SelectMany(s => s.Value.Recent.Select(e => (Drive: s.Key, Entry: e))).OrderByDescending(e => e.Entry.Time).Take(100).ToArray();
         int waitingCount = snapshots.Values.Sum(snapshot => snapshot.WaitingCount);
         string waitingLabel = DesktopText.Get("popup.queued").Replace("{{count}}", waitingCount.ToString());
         Empty.IsVisible = active.Length == 0 && recent.Length == 0 && waitingCount == 0;
         TaskScroll.IsVisible = !Empty.IsVisible;
-        if (active.Length > 0)
+        ActiveSection.IsVisible = active.Length > 0;
+        ActiveRows.Children.Clear();
+        foreach (var (drive, file) in active)
         {
-            Section(DesktopText.Get("popup.syncing"));
-            foreach (var (drive, file) in active)
-            {
-                Row(drive, file.Entry, true, file.Transfer);
-            }
+            ActiveRows.Children.Add(Row(drive, file.Entry, true, file.Transfer));
         }
 
-        if (waitingCount > 0)
+        WaitingSection.IsVisible = waitingCount > 0;
+        WaitingTitle.Text = waitingLabel;
+        var waiting = snapshots.SelectMany(s => s.Value.Waiting.Select(file => new WaitingRow(s.Key.Account.Name, file)))
+            .Take(SyncActivity.Capacity).ToArray();
+        if (!waiting.SequenceEqual(displayedWaiting))
         {
-            Section(waitingLabel);
-            foreach (string key in snapshots.Values.SelectMany(snapshot => snapshot.Waiting).Take(SyncActivity.Capacity))
-            {
-                Tasks.Children.Add(new TextBlock { Text = key, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(16, 4) });
-            }
+            displayedWaiting = waiting;
+            WaitingItems.ItemsSource = waiting;
         }
 
-        if (recent.Length > 0)
+        int remaining = waitingCount - waiting.Length;
+        WaitingMore.IsVisible = remaining > 0;
+        WaitingMore.Text = remaining > 0 ? DesktopText.Get("popup.queuedMore").Replace("{{count}}", remaining.ToString()) : null;
+
+        RecentSection.IsVisible = recent.Length > 0;
+        RecentRows.Children.Clear();
+        foreach (var (drive, entry) in recent)
         {
-            Section(DesktopText.Get("popup.recent"));
-            foreach (var (drive, entry) in recent)
-            {
-                Row(drive, entry, false, null);
-            }
+            RecentRows.Children.Add(Row(drive, entry, false, null));
         }
 
         bool idle = active.Length == 0 && waitingCount == 0;
@@ -147,16 +180,7 @@ internal sealed partial class ActivityWindow : Window
         StatusIcon.Foreground = idle ? Brushes.SeaGreen : Brushes.DodgerBlue;
     }
 
-    private void Section(string title)
-    {
-        Tasks.Children.Add(new TextBlock
-        {
-            Classes = { "secondary" }, Text = title, FontSize = 12, FontWeight = FontWeight.SemiBold,
-            LineHeight = 20, Margin = new Thickness(16, 8, 16, 0)
-        });
-    }
-
-    private void Row(MountedDrive drive, ActivityEntry entry, bool active, ActivityTransfer? transfer)
+    private Grid Row(MountedDrive drive, ActivityEntry entry, bool active, ActivityTransfer? transfer)
     {
         var row = new Grid { ColumnDefinitions = new ColumnDefinitions("32,*"), ColumnSpacing = 8, Margin = new Thickness(16, 12) };
         var file = new PathIcon
@@ -203,7 +227,7 @@ internal sealed partial class ActivityWindow : Window
             lines.Children.Add(line);
         }
 
-        Tasks.Children.Add(row);
+        return row;
     }
 
     private static string RelativeTime(DateTime time)

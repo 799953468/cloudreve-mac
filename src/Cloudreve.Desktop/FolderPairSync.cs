@@ -15,7 +15,9 @@ internal sealed record PairSyncResult(int Uploaded, int Downloaded, int Removed,
 
 internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair pair, DriveClient drive, SyncActivity? activity = null)
 {
-    private readonly AdaptiveTransfers transfers = new();
+    private readonly AdaptiveWorkQueue localScan = new();
+    private readonly AdaptiveWorkQueue remoteScan = new();
+    private readonly AdaptiveWorkQueue transfers = new();
 
     internal async Task<PairSyncResult> RunAsync(CancellationToken cancel)
     {
@@ -37,9 +39,9 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                 store.SaveBaseline(pair, baseline);
             }
 
-            var local = await PairInventory.ReadLocalAsync(pair, rules, baseline, cancel);
+            var local = await PairInventory.ReadLocalAsync(pair, rules, baseline, localScan, cancel);
             await VerifyRemoteRootAsync(cancel);
-            var remote = await PairInventory.ReadRemoteAsync(pair.Remote, "", drive, rules, cancel);
+            var remote = await PairInventory.ReadRemoteAsync(pair.Remote, "", drive, rules, remoteScan, cancel);
             await VerifyRemoteRootAsync(cancel);
             FolderPairStore.Verify(pair);
 

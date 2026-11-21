@@ -3,27 +3,35 @@ using System.Runtime.ExceptionServices;
 
 namespace Cloudreve.Desktop;
 
-// One scheduler per mount. Only its coordinator adjusts the window or applies checkpoints.
-internal sealed class AdaptiveTransfers
+// Only the coordinator changes the window, merges results or queues discovered children.
+internal sealed class AdaptiveWorkQueue
 {
     private const int Maximum = 6;
     internal int Limit { get; private set; } = 2;
     private int healthyCompletions;
 
-    internal async Task RunAsync<T, TResult>(IReadOnlyList<T> items, Func<T, CancellationToken, Task<TResult>> transfer,
-        Action<TResult> checkpoint, CancellationToken cancel)
+    internal Task RunAsync<T, TResult>(IEnumerable<T> items, Func<T, CancellationToken, Task<TResult>> process,
+        Action<TResult> accept, CancellationToken cancel)
     {
+        return TraverseAsync(items, process, (result, _) => accept(result), cancel);
+    }
+
+    internal async Task TraverseAsync<T, TResult>(IEnumerable<T> items, Func<T, CancellationToken, Task<TResult>> process,
+        Action<TResult, Action<T>> accept, CancellationToken cancel)
+    {
+        cancel.ThrowIfCancellationRequested();
+        var pending = new Queue<T>(items);
+        Action<T> enqueue = pending.Enqueue;
         var running = new List<Task<TResult>>(Maximum);
-        int next = 0;
         ExceptionDispatchInfo? failure = null;
         bool backedOff = false;
         using (var batch = CancellationTokenSource.CreateLinkedTokenSource(cancel))
         {
-            while (next < items.Count || running.Count > 0)
+            while (pending.Count > 0 || running.Count > 0)
             {
-                while (failure == null && !cancel.IsCancellationRequested && next < items.Count && running.Count < Limit)
+                while (failure == null && !cancel.IsCancellationRequested && running.Count < Limit && pending.TryDequeue(out var item))
                 {
-                    running.Add(StartAsync(items[next++]));
+                    running.Add(StartAsync(item));
                 }
 
                 if (running.Count == 0)
@@ -35,8 +43,9 @@ internal sealed class AdaptiveTransfers
                 running.Remove(completed);
                 try
                 {
-                    checkpoint(await completed);
-                    if (failure == null && next < items.Count && Limit < Maximum && ++healthyCompletions >= Limit)
+                    accept(await completed, enqueue);
+                    bool hasBacklog = pending.Count > Limit - running.Count;
+                    if (failure == null && hasBacklog && Limit < Maximum && ++healthyCompletions >= Limit)
                     {
                         Limit++;
                         healthyCompletions = 0;
@@ -45,7 +54,7 @@ internal sealed class AdaptiveTransfers
                 catch (Exception ex)
                 {
                     if (!backedOff && (ex is HttpRequestException { StatusCode: HttpStatusCode.TooManyRequests or HttpStatusCode.ServiceUnavailable } ||
-                                       ex is OperationCanceledException && !batch.IsCancellationRequested))
+                                       ex is TimeoutException || ex is OperationCanceledException && !batch.IsCancellationRequested))
                     {
                         Limit = Math.Max(1, Limit / 2);
                         backedOff = true;
@@ -59,7 +68,7 @@ internal sealed class AdaptiveTransfers
 
             async Task<TResult> StartAsync(T item)
             {
-                return await transfer(item, batch.Token);
+                return await process(item, batch.Token);
             }
         }
 

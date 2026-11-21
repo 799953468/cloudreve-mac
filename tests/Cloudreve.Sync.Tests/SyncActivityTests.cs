@@ -88,6 +88,23 @@ public sealed class SyncActivityTests
     }
 
     [Fact]
+    public void WaitingSnapshotKeepsManifestOrderAndCountsItemsBeyondTheVisibleLimit()
+    {
+        var activity = new SyncActivity();
+        var jobs = Enumerable.Range(0, SyncActivity.Capacity + 3).Reverse().Select(i =>
+            new QueuedFile(Guid.NewGuid(), new FileTransfer($"folder/{i}.txt", i % 2 == 0 ? SyncAction.Upload : SyncAction.Download, null, null, null))).ToArray();
+        activity.SetPending(jobs);
+        var worker = activity.CreateWorker();
+        worker.Start("上传", jobs[1].File.Key);
+
+        var snapshot = activity.ChangesSince(-1)!;
+        var expected = jobs.Where(job => job != jobs[1]).Take(SyncActivity.Capacity).Select(job => new WaitingFile(job.File.Key, job.File.Action));
+        Assert.Equal(expected, snapshot.Waiting);
+        Assert.Equal(jobs.Length - 1, snapshot.WaitingCount);
+        Assert.Equal(jobs[1].File.Key, Assert.Single(snapshot.Active).Entry.Key);
+    }
+
+    [Fact]
     public void SeparatesCurrentFromBoundedRecentHistory()
     {
         var activity = new SyncActivity();

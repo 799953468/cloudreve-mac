@@ -191,7 +191,7 @@ internal sealed partial class FolderPairSync
     private async Task<bool> TryTrashDirectoryAsync(PairNode directory, Dictionary<string, FileBaseline> baseline, PairIgnoreRules rules, CancellationToken cancel)
     {
         var target = directory.Remote!;
-        var tree = await PairInventory.ReadRemoteAsync(target.Uri, directory.Key, drive, rules, cancel);
+        var tree = await PairInventory.ReadRemoteAsync(target.Uri, directory.Key, drive, rules, remoteScan, cancel);
         if (tree.Excluded.Count != 0)
         {
             return false;

@@ -211,8 +211,12 @@ public sealed class WindowTests : IDisposable
                 if (name == "Personal")
                 {
                     string cache = pairStore.TransferDirectory(pair);
-                    var remote = new DriveEntry("queued.txt", account.Root + "/queued.txt", false, 100, "v1");
-                    TransferQueue.Open(cache).Reconcile([new FileTransfer(remote.Name, SyncAction.Download, null, remote, null)]);
+                    var remote = new DriveEntry("Budget.xlsx", account.Root + "/Finance/2026/Budget.xlsx", false, 100, "v1");
+                    TransferQueue.Open(cache).Reconcile([
+                        new FileTransfer("Finance/2026/Budget.xlsx", SyncAction.Download, null, remote, null),
+                        new FileTransfer("Notes.txt", SyncAction.Upload, null, null, null),
+                        new FileTransfer("Archive/Reports/Quarterly review and supporting documentation.pdf", SyncAction.CompareContents, null, null, null)
+                    ]);
                     var activity = new SyncActivity(cache);
                     activity.Start("下载", "second.txt");
                     activity.Finish("完成");
@@ -242,13 +246,33 @@ public sealed class WindowTests : IDisposable
                 Assert.False(popup.Empty.IsVisible);
                 Assert.Contains("first.txt", Labels(popup.Tasks));
                 Assert.Contains("second.txt", Labels(popup.Tasks));
-                Assert.Contains("queued.txt", Labels(popup.Tasks));
+                popup.UpdateLayout();
+                var waitingLabels = Labels(popup.WaitingItems).ToArray();
+                Assert.Equal(new[] { "Budget.xlsx", "Personal · Finance/2026", "下载", "Notes.txt", "Personal", "上传",
+                    "Quarterly review and supporting documentation.pdf", "Personal · Archive/Reports", "核对内容" }, waitingLabels);
+                Assert.Equal("等待传输（3）", popup.WaitingTitle.Text);
+                Assert.False(popup.WaitingMore.IsVisible);
+                var rows = popup.WaitingItems.ItemsSource;
+                work.Activity.ReportBytes(200);
+                popup.Refresh();
+                Assert.Same(rows, popup.WaitingItems.ItemsSource);
                 Capture(popup, dark ? "activity-dark" : "activity");
+                Click(Assert.IsType<Button>(popup.Chips.Children[1]));
+                Assert.False(popup.WaitingSection.IsVisible);
                 Click(Assert.IsType<Button>(popup.Chips.Children[2]));
+                popup.UpdateLayout();
                 Assert.DoesNotContain("first.txt", Labels(popup.Tasks));
                 Assert.Contains("second.txt", Labels(popup.Tasks));
-                Assert.Contains("queued.txt", Labels(popup.Tasks));
-                Assert.Equal("等待传输（1）", popup.Footer.Text);
+                Assert.Equal(waitingLabels, Labels(popup.WaitingItems));
+                Assert.Equal("等待传输（3）", popup.Footer.Text);
+                var backlog = Enumerable.Range(0, SyncActivity.Capacity + 2).Select(i =>
+                    new QueuedFile(Guid.NewGuid(), new FileTransfer($"{i}.txt", SyncAction.Upload, null, null, null))).ToArray();
+                host.Drives[1].Activity.SetPending(backlog);
+                popup.Refresh();
+                Assert.Equal(SyncActivity.Capacity, popup.WaitingItems.ItemCount);
+                Assert.Equal("等待传输（102）", popup.WaitingTitle.Text);
+                Assert.True(popup.WaitingMore.IsVisible);
+                Assert.Equal("另有 2 项等待传输", popup.WaitingMore.Text);
                 host.OpenSettings();
                 Assert.Equal(2, host.Settings!.Cards.Children.Count);
                 host.Settings.RequestedThemeVariant = theme;
