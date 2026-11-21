@@ -1,4 +1,7 @@
 {
+  "传输缓存不是普通文件。": "The transfer cache is not a regular file.",
+  "上传分片断点无效。": "The saved upload checkpoint is invalid.",
+  "下载分段与请求的文件范围不符。": "The download response does not match the requested byte range.",
   "连接云盘": "Connect drive",
   "输入 Cloudreve 站点地址，在浏览器中完成授权。": "Enter your Cloudreve site address, then authorize access in your browser.",
   "站点地址（HTTP 或 HTTPS）": "Site address (HTTP or HTTPS)",

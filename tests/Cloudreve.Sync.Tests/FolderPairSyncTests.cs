@@ -617,6 +617,237 @@ public sealed class FolderPairSyncTests : IDisposable
         Assert.Empty(Directory.GetFiles(pair.Local, "*.part"));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RestoresOnlyUnacknowledgedUploadParts(bool updateExisting)
+    {
+        const string key = "upload";
+        const string content = "abcdefghi";
+        if (updateExisting)
+        {
+            site.Put(Root + "/" + key, "old");
+            await RunAsync();
+        }
+
+        File.WriteAllText(Path.Combine(pair.Local, key), content);
+        site.UploadChunkSize = 3;
+        site.InterruptPart = 1;
+        string cache = store.TransferDirectory(pair);
+        await Assert.ThrowsAsync<HttpRequestException>(() => RunAsync(new SyncActivity(cache)));
+        var restarted = new SyncActivity(cache);
+        Assert.Equal([key], restarted.ChangesSince(-1)!.Waiting);
+        Assert.Single(restarted.ChangesSince(-1)!.Recent);
+        var checkpoint = Assert.Single(Directory.GetFiles(cache, "*.upload"));
+        if (OperatingSystem.IsMacOS())
+        {
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(checkpoint));
+        }
+
+        // Simulate a process dying halfway through its next receipt append.
+        File.AppendAllText(Assert.Single(Directory.GetFiles(cache, "*.receipts")), "{\"NextPart\":");
+        site.InterruptPart = null;
+        var result = await RunAsync(restarted);
+        Assert.Equal(1, result.Uploaded);
+        Assert.Equal(1, site.SessionsCreated);
+        Assert.Equal(0, site.SessionsCancelled);
+        Assert.Equal([0, 1, 1, 2], site.Parts.Select(part => part.Part));
+        Assert.Single(site.Parts.Select(part => part.Id).Distinct());
+        Assert.Equal(content, site.Files[Root + "/" + key].Text);
+        Assert.Empty(Directory.GetFiles(cache, "*.upload"));
+        Assert.Empty(new SyncActivity(cache).ChangesSince(-1)!.Waiting);
+        Assert.Equal(2, new SyncActivity(cache).ChangesSince(-1)!.Recent.Length);
+    }
+
+    [Fact]
+    public async Task RecoversVerifiedFileBeforeReplanningEditsMadeWhileStopped()
+    {
+        site.Put(Root + "/a", "first");
+        site.Put(Root + "/z", "waiting");
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        site.BeforeStorageAsync = async (uri, cancel) =>
+        {
+            if (uri.EndsWith("/z", StringComparison.Ordinal))
+            {
+                await hold.Task.WaitAsync(cancel);
+                throw new HttpRequestException("offline");
+            }
+        };
+
+        string cache = store.TransferDirectory(pair);
+        var run = RunAsync();
+        var snapshot = temp.CreateSubdirectory("at-interruption");
+        try
+        {
+            using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken))
+            {
+                timeout.CancelAfter(TimeSpan.FromSeconds(10));
+                while (!Directory.EnumerateFiles(cache, "*.verified").Any())
+                {
+                    await Task.Delay(10, timeout.Token);
+                }
+            }
+
+            Assert.Empty(store.ReadBaseline(pair));
+            string completed = Assert.Single(Directory.GetFiles(cache, "*.verified"));
+            File.Copy(completed, Path.Combine(snapshot.FullName, Path.GetFileName(completed)));
+            File.Copy(Path.Combine(cache, "pending.json"), Path.Combine(snapshot.FullName, "pending.json"));
+        }
+        finally
+        {
+            hold.TrySetResult();
+            await Assert.ThrowsAsync<HttpRequestException>(() => run);
+        }
+
+        // Restore the on-disk snapshot from before shutdown had a chance to checkpoint the batch.
+        store.SaveBaseline(pair, []);
+        foreach (var file in snapshot.GetFiles())
+        {
+            file.CopyTo(Path.Combine(cache, file.Name), true);
+        }
+
+        site.BeforeStorageAsync = null;
+        File.WriteAllText(Path.Combine(pair.Local, "a"), "edited while stopped");
+        var result = await RunAsync();
+        Assert.Empty(result.Conflicts);
+        Assert.Equal(1, result.Uploaded);
+        Assert.Equal(1, result.Downloaded);
+        Assert.Equal("edited while stopped", site.Files[Root + "/a"].Text);
+        Assert.Empty(Directory.GetFiles(cache, "*.verified"));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ReplansExpiredSessionOrEditedSource(bool expired)
+    {
+        string path = Path.Combine(pair.Local, "upload");
+        File.WriteAllText(path, "abcdef");
+        site.UploadChunkSize = 3;
+        site.InterruptPart = 1;
+        site.TicketExpiry = expired ? 1 : null;
+        await Assert.ThrowsAsync<HttpRequestException>(() => RunAsync());
+        site.InterruptPart = null;
+        site.TicketExpiry = null;
+        if (!expired)
+        {
+            File.WriteAllText(path, "123456");
+            Assert.Equal(0, (await RunAsync()).Uploaded);
+        }
+
+        Assert.Equal(1, (await RunAsync()).Uploaded);
+        Assert.Equal(2, site.SessionsCreated);
+        Assert.Equal(1, site.SessionsCancelled);
+        Assert.Equal([0, 1, 0, 1], site.Parts.Select(part => part.Part));
+        Assert.Equal(File.ReadAllText(path), site.Files[Root + "/upload"].Text);
+    }
+
+    [Theory]
+    [InlineData(true, false, false)]
+    [InlineData(false, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(true, false, true)]
+    public async Task RestoresOnlyVerifiedDownloadPrefixes(bool ranges, bool corruptPrefix, bool newVersion)
+    {
+        const string uri = Root + "/remote";
+        string path = Path.Combine(pair.Local, "remote");
+        site.Put(uri, "old");
+        await RunAsync();
+        site.Put(uri, "abcdefgh");
+        site.DownloadLimit = 3;
+        await Assert.ThrowsAsync<InvalidDataException>(() => RunAsync());
+        Assert.Equal("old", File.ReadAllText(path));
+        string cache = store.TransferDirectory(pair);
+        string part = Assert.Single(Directory.GetFiles(cache, "*.part"));
+        Assert.Equal("abc", File.ReadAllText(part));
+        if (corruptPrefix)
+        {
+            File.WriteAllText(part, "bad");
+        }
+        else
+        {
+            File.AppendAllText(part, "uncommitted tail");
+        }
+
+        if (newVersion)
+        {
+            site.Put(uri, "ABCDEFGH");
+        }
+
+        site.AcceptRanges = ranges;
+        site.DownloadLimit = null;
+        Assert.Equal(1, (await RunAsync()).Downloaded);
+        Assert.Equal(corruptPrefix || newVersion ? (long?)null : 3L, site.Ranges[^1]);
+        Assert.Equal(site.Files[uri].Text, File.ReadAllText(path));
+        Assert.Empty(Directory.GetFiles(cache, "*.part"));
+        Assert.Empty(TransferQueue.Open(cache).Entries);
+    }
+
+    [Fact]
+    public async Task NeverResumesOrCancelsAnotherClientsPlaceholder()
+    {
+        string path = Path.Combine(pair.Local, "upload");
+        File.WriteAllText(path, "abcdef");
+        site.UploadChunkSize = 3;
+        site.InterruptPart = 1;
+        await Assert.ThrowsAsync<HttpRequestException>(() => RunAsync());
+        site.ForeignPlaceholder = true;
+        site.InterruptPart = null;
+        var result = await RunAsync();
+        Assert.Contains("upload", result.Conflicts);
+        Assert.Equal([0, 1], site.Parts.Select(part => part.Part));
+        Assert.Equal(0, site.SessionsCancelled);
+        Assert.Equal("abcdef", File.ReadAllText(path));
+    }
+
+    [Fact]
+    public async Task RejectsMismatchedRangeBeforeInstallingAnyBytes()
+    {
+        site.Put(Root + "/remote", "abcdefgh");
+        site.DownloadLimit = 3;
+        await Assert.ThrowsAsync<InvalidDataException>(() => RunAsync());
+        site.AcceptRanges = true;
+        site.BadRange = true;
+        site.DownloadLimit = null;
+        await Assert.ThrowsAsync<InvalidDataException>(() => RunAsync());
+        Assert.False(File.Exists(Path.Combine(pair.Local, "remote")));
+        Assert.Empty(store.ReadBaseline(pair));
+        await RunAsync();
+        Assert.Null(site.Ranges[^1]);
+        Assert.Equal("abcdefgh", File.ReadAllText(Path.Combine(pair.Local, "remote")));
+    }
+
+    [Fact]
+    public async Task UnsatisfiableRangeRetriesWithAFullAnonymousRequest()
+    {
+        site.Put(Root + "/remote", "abcdefgh");
+        site.DownloadLimit = 3;
+        await Assert.ThrowsAsync<InvalidDataException>(() => RunAsync());
+        site.RejectRange = true;
+        site.DownloadLimit = null;
+        Assert.Equal(1, (await RunAsync()).Downloaded);
+        Assert.Equal(new long?[] { null, 3, null }, site.Ranges);
+        Assert.Equal("abcdefgh", File.ReadAllText(Path.Combine(pair.Local, "remote")));
+    }
+
+    [Fact]
+    public async Task IgnoresOrDisconnectsWithoutReplayingStaleDownloads()
+    {
+        site.Put(Root + "/remote", "abcdefgh");
+        site.DownloadLimit = 3;
+        string cache = store.TransferDirectory(pair);
+        await Assert.ThrowsAsync<InvalidDataException>(() => RunAsync(new SyncActivity(cache)));
+        store.SaveRules(pair, "remote");
+        Assert.Equal(0, (await RunAsync()).Downloaded);
+        Assert.Empty(TransferQueue.Open(cache).Entries);
+        Assert.Empty(Directory.GetFiles(cache, "*.part"));
+        Assert.False(File.Exists(Path.Combine(pair.Local, "remote")));
+        Assert.Single(new SyncActivity(cache).ChangesSince(-1)!.Recent);
+        store.Disconnect(pair);
+        Assert.False(Directory.Exists(cache));
+        Assert.Equal("abcdefgh", site.Files[Root + "/remote"].Text);
+    }
+
     [Fact]
     public async Task DoesNotFollowLocalLinksOrGuessBetweenCaseVariants()
     {
@@ -649,6 +880,16 @@ public sealed class FolderPairSyncTests : IDisposable
         internal int Requests, Transfers;
         internal bool Incomplete, Truncate;
         internal string? ReadbackOverride;
+        internal int? DownloadLimit;
+        internal bool AcceptRanges, BadRange, RejectRange, ForeignPlaceholder;
+        internal readonly List<long?> Ranges = [];
+        internal int UploadChunkSize, SessionsCreated, SessionsCancelled;
+        internal int? InterruptPart;
+        internal long? TicketExpiry;
+        internal readonly List<(string Id, int Part)> Parts = [];
+        private readonly Dictionary<string, string> placeholders = [];
+        private readonly Dictionary<string, List<string>> uploadedParts = [];
+        private readonly Dictionary<string, long> uploadLengths = [];
         internal Func<string, CancellationToken, Task>? BeforeStorageAsync;
         internal string? RejectTrash;
         internal Action<string>? BeforeList;
@@ -678,6 +919,14 @@ public sealed class FolderPairSyncTests : IDisposable
         private object Entry(string uri)
         {
             bool folder = Folders.Contains(uri);
+            if (placeholders.TryGetValue(uri, out var sessionId))
+            {
+                Files.TryGetValue(uri, out var old);
+                return new { id = Ids.GetValueOrDefault(uri, sessionId), name = uri[(uri.LastIndexOf('/') + 1)..], path = uri, type = 0,
+                    size = uploadLengths[sessionId], primary_entity = old.Version,
+                    metadata = new Dictionary<string, string> { ["sys:upload_session_id"] = ForeignPlaceholder ? "another-client" : sessionId } };
+            }
+
             return new
             {
                 id = uri == Root ? RootId : folder ? Ids.GetValueOrDefault(uri, uri) : Ids[uri], name = Uri.UnescapeDataString(uri[(uri.LastIndexOf('/') + 1)..]), path = uri, type = folder ? 1 : 0,
@@ -718,7 +967,23 @@ public sealed class FolderPairSyncTests : IDisposable
             {
                 Assert.Null(request.Headers.Authorization);
                 Transfers++;
-                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(Truncate ? "" : ReadbackOverride ?? Files[query["uri"]!].Text) };
+                string text = Truncate ? "" : ReadbackOverride ?? Files[query["uri"]!].Text;
+                long? from = request.Headers.Range?.Ranges.Single().From;
+                Ranges.Add(from);
+                if (from != null && RejectRange)
+                {
+                    return new HttpResponseMessage(HttpStatusCode.RequestedRangeNotSatisfiable);
+                }
+
+                if (from != null && AcceptRanges)
+                {
+                    int offset = checked((int)from.Value);
+                    var response = new HttpResponseMessage(HttpStatusCode.PartialContent) { Content = new StringContent(text[offset..]) };
+                    response.Content.Headers.ContentRange = new System.Net.Http.Headers.ContentRangeHeaderValue(BadRange ? 0 : offset, text.Length - 1, text.Length);
+                    return response;
+                }
+
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(DownloadLimit is int limit ? text[..limit] : text) };
             }
 
             Assert.NotNull(request.Headers.Authorization);
@@ -727,7 +992,7 @@ public sealed class FolderPairSyncTests : IDisposable
                 string parent = query["uri"]!;
                 BeforeList?.Invoke(parent);
                 Assert.Contains(parent, Folders);
-                var children = Files.Keys.Concat(Folders).Where(key => key[..key.LastIndexOf('/')] == parent).Select(Entry).ToArray();
+                var children = Files.Keys.Concat(Folders).Concat(placeholders.Keys).Distinct().Where(key => key[..key.LastIndexOf('/')] == parent).Select(Entry).ToArray();
                 object pagination = Incomplete ? new { total_items = children.Length + 1, page = 0, page_size = 100 } : new { };
                 return Ok(new { files = children, pagination });
             }
@@ -739,7 +1004,25 @@ public sealed class FolderPairSyncTests : IDisposable
 
             if (uri.AbsolutePath.StartsWith("/api/v4/file/upload/", StringComparison.Ordinal))
             {
-                Put(uploads[uri.Segments[^2].TrimEnd('/')], await request.Content!.ReadAsStringAsync(cancellationToken));
+                string id = uri.Segments[^2].TrimEnd('/');
+                int part = int.Parse(uri.Segments[^1]);
+                Parts.Add((id, part));
+                if (part == InterruptPart)
+                {
+                    return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+                }
+
+                var parts = uploadedParts[id];
+                Assert.Equal(parts.Count, part);
+                parts.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
+                string target = uploads[id];
+                string text = string.Concat(parts);
+                if (Encoding.UTF8.GetByteCount(text) == uploadLengths[id])
+                {
+                    Put(target, text);
+                    placeholders.Remove(target);
+                }
+
                 Transfers++;
                 return Ok(null);
             }
@@ -756,6 +1039,13 @@ public sealed class FolderPairSyncTests : IDisposable
                     Assert.False(body.GetProperty("copy").GetBoolean());
                     Move(oldPath, body.GetProperty("dst").GetString() + oldPath[oldPath.LastIndexOf('/')..]);
                     return Ok(null);
+                case "/api/v4/file/upload" when request.Method == HttpMethod.Delete:
+                    string cancelled = body.GetProperty("id").GetString()!;
+                    string cancelledTarget = body.GetProperty("uri").GetString()!;
+                    Assert.Equal(cancelled, placeholders[cancelledTarget]);
+                    placeholders.Remove(cancelledTarget);
+                    SessionsCancelled++;
+                    return Ok(null);
                 case "/api/v4/file/upload":
                     string uploading = body.GetProperty("uri").GetString()!;
                     if (Files.TryGetValue(uploading, out var previous))
@@ -766,7 +1056,11 @@ public sealed class FolderPairSyncTests : IDisposable
 
                     string id = Guid.NewGuid().ToString("N");
                     uploads.Add(id, uploading);
-                    return Ok(new { session_id = id, chunk_size = 0 });
+                    uploadedParts.Add(id, []);
+                    uploadLengths.Add(id, body.GetProperty("size").GetInt64());
+                    placeholders.Add(uploading, id);
+                    SessionsCreated++;
+                    return Ok(new { session_id = id, chunk_size = UploadChunkSize, expires = TicketExpiry ?? DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds() });
                 case "/api/v4/file/url":
                     string source = body.GetProperty("uris")[0].GetString()!;
                     Assert.Equal(Files[source].Version, body.GetProperty("entity").GetString());

@@ -31,6 +31,90 @@ public sealed class DriveProtocolTests
         return new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(value) };
     }
 
+    [Fact]
+    public async Task RestartsEncryptedMultipartUploadAndRetriesOnlyTheOutstandingCallback()
+    {
+        var directory = Directory.CreateTempSubdirectory();
+        try
+        {
+            var cancel = TestContext.Current.CancellationToken;
+            var session = Session();
+            var ticket = JsonSerializer.SerializeToElement(new
+            {
+                session_id = "upload", chunk_size = 3, storage_policy = new { type = "s3" },
+                upload_urls = new[] { "https://storage.example/0", "https://storage.example/1" },
+                completeURL = "https://storage.example/merge", callback_secret = "callback",
+                encrypt_metadata = new { algorithm = UploadCipher.Algorithm, key_plain_text = Convert.ToBase64String(new byte[32]), iv = Convert.ToBase64String(new byte[16]) }
+            });
+            string path = Path.Combine(directory.FullName, "source");
+            byte[] expected = [1, 2, 3, 4, 5];
+            File.WriteAllBytes(path, expected);
+            using (var cipher = UploadCipher.FromTicket(ticket))
+            {
+                cipher!.Apply(expected, 0);
+            }
+
+            int sessions = 0, callbacks = 0, merges = 0;
+            var parts = new List<int>();
+            using (var api = new HttpClient(new Handler(request =>
+            {
+                if (request.RequestUri!.AbsolutePath == "/api/v4/file/upload" && request.Method == HttpMethod.Put)
+                {
+                    sessions++;
+                    return Task.FromResult(Json(new { code = 0, data = ticket }));
+                }
+
+                Assert.Equal("/api/v4/callback/s3/upload/callback", request.RequestUri.AbsolutePath);
+                callbacks++;
+                return Task.FromResult(callbacks == 1 ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) : Json(new { code = 0 }));
+            })))
+            using (var storage = new HttpClient(new Handler(async request =>
+            {
+                Assert.Null(request.Headers.Authorization);
+                string key = request.RequestUri!.AbsolutePath[1..];
+                if (key == "merge")
+                {
+                    merges++;
+                    var xml = System.Xml.Linq.XElement.Parse(await request.Content!.ReadAsStringAsync(cancel));
+                    Assert.Equal(["tag0", "tag1"], xml.Descendants("ETag").Select(tag => tag.Value));
+                    return new HttpResponseMessage(HttpStatusCode.OK);
+                }
+
+                int index = int.Parse(key);
+                parts.Add(index);
+                Assert.Equal(index == 0 ? expected[..3] : expected[3..], await request.Content!.ReadAsByteArrayAsync(cancel));
+                if (parts.Count == 2)
+                {
+                    return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+                }
+
+                var response = new HttpResponseMessage(HttpStatusCode.OK);
+                response.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue($"\"tag{index}\"");
+                return response;
+            })))
+            {
+                Task RestartAsync()
+                {
+                    var files = new TransferFiles(Path.Combine(directory.FullName, "job"));
+                    var client = new DriveClient(api, storage, session, _ => { });
+                    return client.UploadAsync(path, session.Root + "source", null, cancel, files: files, saved: files.ReadUpload());
+                }
+
+                await Assert.ThrowsAsync<HttpRequestException>(RestartAsync);
+                await Assert.ThrowsAsync<HttpRequestException>(RestartAsync);
+                await RestartAsync();
+                Assert.Equal([0, 1, 1], parts);
+                Assert.Equal(1, sessions);
+                Assert.Equal(1, merges);
+                Assert.Equal(2, callbacks);
+            }
+        }
+        finally
+        {
+            directory.Delete(true);
+        }
+    }
+
     [Theory]
     [InlineData("https://site.example")]
     [InlineData("http://192.168.1.10:5212")]

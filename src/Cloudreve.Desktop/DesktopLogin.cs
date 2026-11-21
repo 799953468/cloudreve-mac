@@ -108,7 +108,10 @@ internal sealed class DesktopLogin
         int code = json.GetProperty("code").GetInt32();
         if (code != 0)
         {
-            throw new IOException(UiText.Format($"Cloudreve 请求失败（{code}）：{(json.TryGetProperty("msg", out var msg) ? msg.GetString() : "")} "));
+            throw new IOException(UiText.Format($"Cloudreve 请求失败（{code}）：{(json.TryGetProperty("msg", out var msg) ? msg.GetString() : "")} "))
+            {
+                Data = { ["CloudreveCode"] = code }
+            };
         }
 
         if (json.TryGetProperty("data", out var data))

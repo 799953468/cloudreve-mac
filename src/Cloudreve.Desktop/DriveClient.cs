@@ -8,7 +8,7 @@ using System.Text.Json;
 
 namespace Cloudreve.Desktop;
 
-internal sealed record DriveEntry(string Name, string Uri, bool IsFolder, long Size, string? Version = null, bool SkipSync = false, string? Id = null)
+internal sealed record DriveEntry(string Name, string Uri, bool IsFolder, long Size, string? Version = null, bool SkipSync = false, string? Id = null, string? UploadSessionId = null)
 {
     public override string ToString()
     {
@@ -167,7 +167,18 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
         return new DriveEntry(DesktopLogin.Required(file, "name"), DesktopLogin.Required(file, "path"),
             type == 1, file.GetProperty("size").GetInt64(),
             file.TryGetProperty("primary_entity", out var version) ? version.GetString() : null, type is not (0 or 1) || HasSyncExclusion(file),
-            file.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String ? id.GetString() : null);
+            file.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String ? id.GetString() : null, UploadPlaceholder(file, type));
+    }
+
+    private static string? UploadPlaceholder(JsonElement file, int type)
+    {
+        if (type == 0 && file.TryGetProperty("metadata", out var metadata) && metadata.ValueKind == JsonValueKind.Object &&
+            !metadata.TryGetProperty("sys:shared_redirect", out _) && metadata.TryGetProperty("sys:upload_session_id", out var id) && id.ValueKind == JsonValueKind.String)
+        {
+            return id.GetString();
+        }
+
+        return null;
     }
 
     private static bool HasSyncExclusion(JsonElement file)
@@ -212,6 +223,28 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
         }
     }
 
+    internal async Task<string> StageDownloadAsync(DriveEntry file, TransferFiles files, string destination, CancellationToken cancel, SyncActivity? activity)
+    {
+        using (var partial = new DownloadPartial(files))
+        {
+            await partial.RestoreAsync(file.Size, cancel);
+            if (!partial.Complete)
+            {
+                await ReadDownloadAsync(file, partial.Stream, partial.Hash, cancel, activity, partial);
+            }
+
+            // Stage on the target volume so the final install is an atomic rename even on an external disk.
+            partial.Stream.Position = 0;
+            using (var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true))
+            {
+                await partial.Stream.CopyToAsync(output, cancel);
+                output.Flush(true);
+            }
+
+            return Convert.ToHexString(partial.Hash.GetCurrentHash());
+        }
+    }
+
     internal async Task<string> HashDownloadAsync(DriveEntry file, CancellationToken cancel, SyncActivity? activity = null)
     {
         using (var digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
@@ -221,7 +254,7 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
         }
     }
 
-    private async Task ReadDownloadAsync(DriveEntry file, Stream? output, IncrementalHash? digest, CancellationToken cancel, SyncActivity? activity)
+    private async Task<Uri> DownloadUriAsync(DriveEntry file, CancellationToken cancel)
     {
         var parameters = new Dictionary<string, object> { ["uris"] = new[] { file.Uri }, ["download"] = true };
         if (!string.IsNullOrEmpty(file.Version))
@@ -238,18 +271,68 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
             throw new InvalidDataException(UiText.Get("站点未返回可用的下载地址。"));
         }
 
+        return url;
+    }
+
+    private async Task<HttpResponseMessage> GetDownloadAsync(Uri url, long offset, CancellationToken cancel)
+    {
         // The signed URL can point at a different host. Never attach site credentials.
-        using (var response = await storage.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancel))
+        using (var request = new HttpRequestMessage(HttpMethod.Get, url))
+        {
+            if (offset > 0)
+            {
+                request.Headers.Range = new RangeHeaderValue(offset, null);
+            }
+
+            return await storage.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancel);
+        }
+    }
+
+    private async Task ReadDownloadAsync(DriveEntry file, Stream? output, IncrementalHash? digest, CancellationToken cancel, SyncActivity? activity,
+        DownloadPartial? partial = null)
+    {
+        var url = await DownloadUriAsync(file, cancel);
+        long offset = partial?.Stream.Position ?? 0;
+        var download = await GetDownloadAsync(url, offset, cancel);
+        if (offset > 0 && download.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable)
+        {
+            download.Dispose();
+            partial!.Reset();
+            offset = 0;
+            download = await GetDownloadAsync(url, offset, cancel);
+        }
+
+        using (var response = download)
         {
             response.EnsureSuccessStatusCode();
+            if (response.StatusCode == HttpStatusCode.PartialContent)
+            {
+                var range = response.Content.Headers.ContentRange;
+                if (range?.Unit != "bytes" || range.From != offset || range.To != file.Size - 1 || range.Length != file.Size ||
+                    response.Content.Headers.ContentLength is long length && length != file.Size - offset)
+                {
+                    partial?.Reset();
+                    throw new InvalidDataException(UiText.Get("下载分段与请求的文件范围不符。"));
+                }
+            }
+            else if (response.StatusCode == HttpStatusCode.OK && offset > 0)
+            {
+                partial!.Reset();
+                offset = 0;
+            }
+            else if (response.StatusCode != HttpStatusCode.OK)
+            {
+                throw new InvalidDataException(UiText.Get("下载分段与请求的文件范围不符。"));
+            }
+
             using (var input = await response.Content.ReadAsStreamAsync(cancel))
             {
                 const int bufferSize = 81920;
                 byte[] buffer = ArrayPool<byte>.Shared.Rent(bufferSize);
-                long received = 0;
+                long received = offset;
                 try
                 {
-                    activity?.BeginTransfer(UiText.Get("读取云端内容"), file.Size);
+                    activity?.BeginTransfer(UiText.Get("读取云端内容"), file.Size, offset);
                     while (true)
                     {
                         if (activity != null)
@@ -265,6 +348,7 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
 
                         if (read > file.Size - received)
                         {
+                            partial?.Reset();
                             throw new InvalidDataException(UiText.Get("下载内容超过预期大小。"));
                         }
 
@@ -275,6 +359,10 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
 
                         digest?.AppendData(buffer, 0, read);
                         received += read;
+                        if (received < file.Size)
+                        {
+                            partial?.Save();
+                        }
                         activity?.ReportBytes(received);
                     }
 
@@ -283,12 +371,17 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
                         throw new InvalidDataException(UiText.Get("文件大小已变化或下载不完整，请刷新后重试。"));
                     }
 
+                    partial?.Save(complete: true);
                     cancel.ThrowIfCancellationRequested();
                 }
                 finally
                 {
                     ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
                     activity?.EndTransfer();
+                    if (received < file.Size)
+                    {
+                        partial?.Save(force: true);
+                    }
                 }
             }
         }

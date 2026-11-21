@@ -36,7 +36,7 @@ internal sealed class PairInventory
             return true;
         }
 
-        Nodes[node.Key] = node with { Kind = NodeKind.Unsupported };
+        Nodes[node.Key] = node with { Kind = NodeKind.Unsupported, Remote = null };
         return false;
     }
 

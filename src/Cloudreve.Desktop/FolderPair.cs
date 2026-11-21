@@ -82,6 +82,12 @@ internal sealed class FolderPairStore
                 }
             }
 
+            string cache = CachePath(pair);
+            if (MacFile.Inspect(cache) == NodeKind.Directory)
+            {
+                Directory.Delete(cache, true);
+            }
+
             File.Delete(Path.Combine(directory, "pair.json"));
             File.Delete(BaselinePath(pair));
             File.Delete(RulesPath(pair));
@@ -114,6 +120,31 @@ internal sealed class FolderPairStore
         WriteJson(BaselinePath(pair), baseline);
     }
 
+    private string CachePath(FolderPair pair)
+    {
+        return Path.Combine(directory, pair.Marker.ToString("N") + ".transfers");
+    }
+
+    internal string TransferDirectory(FolderPair pair)
+    {
+        CheckDirectory(directory);
+        string path = CachePath(pair);
+        if (!OperatingSystem.IsMacOS())
+        {
+            throw new PlatformNotSupportedException();
+        }
+
+        const UnixFileMode privateDirectory = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        Directory.CreateDirectory(path, privateDirectory);
+        CheckDirectory(path);
+        if (File.GetUnixFileMode(path) != privateDirectory)
+        {
+            File.SetUnixFileMode(path, privateDirectory);
+        }
+
+        return path;
+    }
+
     private string RulesPath(FolderPair pair)
     {
         return Path.Combine(directory, pair.Marker.ToString("N") + ".ignore.json");
@@ -137,6 +168,10 @@ internal sealed class FolderPairStore
         {
             var previous = new PairIgnoreRules(ReadRules(pair));
             var baseline = ReadBaseline(pair);
+            var queue = TransferQueue.Open(TransferDirectory(pair));
+            var ignored = queue.Entries.Where(entry => previous.Excludes(entry.File.Key) || next.Excludes(entry.File.Key))
+                .Select(entry => entry.File.Key).ToHashSet();
+            queue.Complete(ignored);
             // Re-included paths must merge from scratch; never replay deletions from the ignored interval.
             foreach (string key in baseline.Keys.ToArray())
             {
@@ -193,13 +228,19 @@ internal sealed class FolderPairStore
         return path.Equals(root, StringComparison.OrdinalIgnoreCase) || path.StartsWith(root.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void WriteJson<T>(string path, T value, bool overwrite = true)
+    internal static void WriteJson<T>(string path, T value, bool overwrite = true)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         string temp = path + "." + Guid.NewGuid().ToString("N");
         try
         {
-            using (var output = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
+            if (!OperatingSystem.IsWindows())
+            {
+                options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            }
+
+            using (var output = new FileStream(temp, options))
             {
                 JsonSerializer.Serialize(output, value);
                 output.Flush(true);

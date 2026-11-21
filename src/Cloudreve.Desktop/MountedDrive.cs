@@ -18,7 +18,7 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
     internal DriveSession Account { get; private set; } = null!;
     internal FolderPairStore PairStore { get; private set; } = null!;
     internal FolderPair? Pair { get; private set; }
-    internal SyncActivity Activity { get; } = new();
+    internal SyncActivity Activity { get; private set; } = new();
     internal (long Used, long Total)? Capacity { get; private set; }
     internal bool PushLost { get; private set; }
     internal bool Expired { get; private set; }
@@ -35,6 +35,7 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
         Pair = PairStore.Load();
         if (Pair != null)
         {
+            Activity = new SyncActivity(PairStore.TransferDirectory(Pair));
             profiles.Reserve(Store, Pair.Local);
         }
         var client = new DriveClient(api, storage, account, rotated =>

@@ -22,6 +22,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
         using (store.Lock(pair))
         {
             FolderPairStore.Verify(pair);
+            var queue = TransferQueue.Open(store.TransferDirectory(pair));
             var baseline = store.ReadBaseline(pair);
             foreach (string key in baseline.Keys)
             {
@@ -29,6 +30,13 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
             }
 
             var rules = new PairIgnoreRules(store.ReadRules(pair));
+            // A worker can finish before the coordinator gets to commit the batch baseline.
+            if (queue.RestoreVerified(baseline, rules))
+            {
+                await VerifyRemoteRootAsync(cancel);
+                store.SaveBaseline(pair, baseline);
+            }
+
             var local = await PairInventory.ReadLocalAsync(pair, rules, baseline, cancel);
             await VerifyRemoteRootAsync(cancel);
             var remote = await PairInventory.ReadRemoteAsync(pair.Remote, "", drive, rules, cancel);
@@ -42,6 +50,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
             var directoryTrash = new List<PairNode>();
             var trashedDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var pending = new List<FileTransfer>();
+            var finished = new HashSet<string>();
             int uploaded = 0, downloaded = 0, removed = 0;
             bool dirty = false;
             try
@@ -69,6 +78,12 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                     local.Nodes.TryGetValue(key, out var here);
                     remote.Nodes.TryGetValue(key, out var there);
                     if (previous?.IsDirectory == true)
+                    {
+                        continue;
+                    }
+
+                    if (there?.Key == key && there.Remote?.UploadSessionId != null &&
+                        await CollectOwnedUploadAsync(key, there.Remote, here, previous, queue, pending, cancel))
                     {
                         continue;
                     }
@@ -134,16 +149,19 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                         case SyncAction.Upload:
                         case SyncAction.Download:
                         case SyncAction.CompareContents:
-                            pending.Add(new FileTransfer(key, action, here, file));
+                            pending.Add(new FileTransfer(key, action, here, file, previous));
                             break;
                         default:
                             throw new InvalidOperationException(UiText.Get("未知的同步操作。"));
                     }
                 }
 
-                await transfers.RunAsync(pending, TransferFileAsync, completed =>
+                var work = queue.Reconcile(pending);
+                activity?.SetPending(work);
+                await transfers.RunAsync(work, (entry, token) => TransferFileAsync(entry.File, queue.Files(entry), token), completed =>
                 {
                     var item = completed.Item;
+                    finished.Add(item.Key);
                     if (completed.Baseline == null)
                     {
                         conflicts.Add(item.Key);
@@ -201,6 +219,9 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                 {
                     store.SaveBaseline(pair, baseline);
                 }
+
+                queue.Complete(finished);
+                activity?.SetPending(queue.Entries);
             }
 
             return new PairSyncResult(uploaded, downloaded, removed, conflicts.ToArray(), choices);
@@ -316,7 +337,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
     }
 
     // Resolve each segment from its parent. Missing intermediate directories can be created for an upload only.
-    private async Task<string> ResolveRemoteAsync(string key, DriveEntry? expected, bool createParents, CancellationToken cancel, bool requireParents = false)
+    private async Task<string> ResolveRemoteAsync(string key, DriveEntry? expected, bool createParents, CancellationToken cancel, bool requireParents = false, string? uploadSession = null)
     {
         string parent = pair.Remote;
         string[] parts = key.Split('/');
@@ -327,7 +348,8 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
             var siblings = await drive.ListAsync(parent, cancel);
             var matches = siblings.Where(item => string.Equals(item.Name.Normalize(), name, StringComparison.OrdinalIgnoreCase)).ToArray();
             var item = matches.FirstOrDefault();
-            if (matches.Length > 1 || item != null && (item.SkipSync || item.Name.Normalize() != name))
+            bool ownUpload = i == parts.Length - 1 && uploadSession != null && item?.UploadSessionId == uploadSession;
+            if (matches.Length > 1 || item != null && (item.SkipSync && !ownUpload || item.Name.Normalize() != name))
             {
                 throw new IOException(UiText.Get("云端名称冲突或条目类型已变化。"));
             }
@@ -340,6 +362,18 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
 
             if (i == parts.Length - 1)
             {
+                if (ownUpload)
+                {
+                    var placeholder = await drive.StatAsync(child, cancel);
+                    if (placeholder.UploadSessionId != uploadSession || !PairInventory.SameUri(placeholder.Uri, child) ||
+                        !MatchesPreviousVersion(placeholder, expected))
+                    {
+                        throw new IOException(UiText.Get("云端文件在同步期间已变化，将重新扫描。"));
+                    }
+
+                    return child;
+                }
+
                 if ((item == null) != (expected == null) || item?.IsFolder == true)
                 {
                     throw new IOException(UiText.Get("云端文件在同步期间已变化。"));
@@ -447,7 +481,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
         return hash;
     }
 
-    private async Task<PairNode> InstallDownloadAsync(string key, DriveEntry file, string? expectedHash, SyncActivity? progress, CancellationToken cancel)
+    private async Task<PairNode> InstallDownloadAsync(string key, DriveEntry file, string? expectedHash, SyncActivity? progress, CancellationToken cancel, TransferFiles? files = null)
     {
         string parent = Path.GetDirectoryName(key) ?? "";
         await RequireLocalAsync(key, expectedHash, cancel);
@@ -456,8 +490,23 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
         string temp = Path.Combine(Path.GetDirectoryName(path)!, $".cloudreve-{Guid.NewGuid():N}.part");
         try
         {
-            await drive.DownloadAsync(file, temp, cancel, progress);
+            string? downloadedHash = null;
+            if (files == null)
+            {
+                await drive.DownloadAsync(file, temp, cancel, progress);
+            }
+            else
+            {
+                downloadedHash = await drive.StageDownloadAsync(file, files, temp, cancel, progress);
+            }
+
             var received = await PairInventory.ReadLocalFileAsync(key, temp, null, cancel);
+            if (downloadedHash != null && received.Hash != downloadedHash)
+            {
+                throw new InvalidDataException(UiText.Get("文件在同步期间已变化。"));
+            }
+
+            await VerifyRemoteRootAsync(cancel);
             await VerifyVersionAsync(file, cancel);
             await RequireLocalAsync(key, expectedHash, cancel);
             if (expectedHash != null)

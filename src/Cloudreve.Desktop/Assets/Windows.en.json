@@ -44,6 +44,7 @@
     "syncing": "Syncing",
     "recent": "Recent",
     "syncingStatus": "Syncing {{count}} file(s)...",
+    "queued": "Queued ({{count}})",
     "upToDate": "Your files are up to date.",
     "waiting": "Waiting...",
     "processing": "Processing..."

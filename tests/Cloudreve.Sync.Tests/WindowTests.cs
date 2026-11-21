@@ -206,7 +206,18 @@ public sealed class WindowTests : IDisposable
             {
                 var account = new DriveSession("https://site.example/", name, name, "cloudreve://my", "u", "access", "refresh", DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1));
                 store.Save(account);
-                new FolderPairStore(Path.Combine(store.DirectoryPath, "folder-pairs"), account).Create(temp.CreateSubdirectory(name).FullName, account.Root, "id");
+                var pairStore = new FolderPairStore(Path.Combine(store.DirectoryPath, "folder-pairs"), account);
+                var pair = pairStore.Create(temp.CreateSubdirectory(name).FullName, account.Root, "id");
+                if (name == "Personal")
+                {
+                    string cache = pairStore.TransferDirectory(pair);
+                    var remote = new DriveEntry("queued.txt", account.Root + "/queued.txt", false, 100, "v1");
+                    TransferQueue.Open(cache).Reconcile([new FileTransfer(remote.Name, SyncAction.Download, null, remote, null)]);
+                    var activity = new SyncActivity(cache);
+                    activity.Start("下载", "second.txt");
+                    activity.Finish("完成");
+                    transport.HoldListingFor = account.DriveId;
+                }
             }
 
             var host = new WorkspaceHost(profiles, transport: transport);
@@ -219,12 +230,9 @@ public sealed class WindowTests : IDisposable
                 await transport.RootScanned.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 Assert.Equal("rotated", sessions.Load()!.AccessToken);
                 var work = host.Drives[0];
-                var personal = host.Drives[1];
                 work.Activity.Start("上传", "first.txt");
                 work.Activity.BeginTransfer("上传", 400);
                 work.Activity.ReportBytes(160);
-                personal.Activity.Start("下载", "second.txt");
-                personal.Activity.Finish("完成");
                 host.OpenPopup();
                 var popup = host.Popup!;
                 var theme = dark ? ThemeVariant.Dark : ThemeVariant.Light;
@@ -234,10 +242,13 @@ public sealed class WindowTests : IDisposable
                 Assert.False(popup.Empty.IsVisible);
                 Assert.Contains("first.txt", Labels(popup.Tasks));
                 Assert.Contains("second.txt", Labels(popup.Tasks));
+                Assert.Contains("queued.txt", Labels(popup.Tasks));
                 Capture(popup, dark ? "activity-dark" : "activity");
                 Click(Assert.IsType<Button>(popup.Chips.Children[2]));
                 Assert.DoesNotContain("first.txt", Labels(popup.Tasks));
                 Assert.Contains("second.txt", Labels(popup.Tasks));
+                Assert.Contains("queued.txt", Labels(popup.Tasks));
+                Assert.Equal("等待传输（1）", popup.Footer.Text);
                 host.OpenSettings();
                 Assert.Equal(2, host.Settings!.Cards.Children.Count);
                 host.Settings.RequestedThemeVariant = theme;
@@ -355,6 +366,7 @@ public sealed class WindowTests : IDisposable
     private sealed class Transport : HttpMessageHandler
     {
         internal int Exchanges { get; private set; }
+        internal string? HoldListingFor { get; set; }
         internal TaskCompletionSource RootScanned { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -377,6 +389,11 @@ public sealed class WindowTests : IDisposable
                 case "/api/v4/user/capacity": body = new { code = 0, data = new { used = 100, total = 1000 } }; break;
                 case "/api/v4/file/info": body = new { code = 0, data = new { id = "id", type = 1, path = "cloudreve://my" } }; break;
                 case "/api/v4/file":
+                    if (HoldListingFor != null && request.Headers.GetValues("X-Cr-Client-Id").Contains(HoldListingFor))
+                    {
+                        await Task.Delay(Timeout.Infinite, cancellationToken);
+                    }
+
                     RootScanned.TrySetResult();
                     body = new { code = 0, data = new { files = Array.Empty<object>(), pagination = new { } } };
                     break;

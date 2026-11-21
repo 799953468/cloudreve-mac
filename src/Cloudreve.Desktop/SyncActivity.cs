@@ -1,18 +1,21 @@
+using Serilog;
+using Serilog.Events;
+
 namespace Cloudreve.Desktop;
 
 internal sealed record ActivityEntry(DateTime Time, string Operation, string Key, string Status);
 
-internal sealed record ActivityTransfer(long Id, string Phase, long Completed, long Total, bool Paused)
+internal sealed record ActivityTransfer(long Id, string Phase, long Completed, long Total, bool Paused, long StartOffset)
 {
     private readonly long started = System.Diagnostics.Stopwatch.GetTimestamp();
     internal double BytesPerSecond
     {
-        get { return Completed / Math.Max(0.001, System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalSeconds); }
+        get { return (Completed - StartOffset) / Math.Max(0.001, System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalSeconds); }
     }
 }
 
 internal sealed record ActiveFile(ActivityEntry Entry, ActivityTransfer? Transfer);
-internal sealed record ActivitySnapshot(long Revision, ActiveFile[] Active, ActivityEntry[] Recent);
+internal sealed record ActivitySnapshot(long Revision, ActiveFile[] Active, ActivityEntry[] Recent, string[] Waiting, int WaitingCount);
 
 internal sealed class SyncActivity
 {
@@ -21,6 +24,8 @@ internal sealed class SyncActivity
     {
         internal readonly HashSet<SyncActivity> Active = [];
         internal readonly Queue<ActivityEntry> Recent = new();
+        internal readonly HashSet<string> Waiting = [];
+        internal string? HistoryPath;
         internal long Revision;
     }
 
@@ -30,6 +35,35 @@ internal sealed class SyncActivity
     private TaskCompletionSource? resume;
     internal SyncActivity() : this(new SharedState())
     {
+    }
+
+    internal SyncActivity(string directory) : this()
+    {
+        state.HistoryPath = Path.Combine(directory, "recent.json");
+        var recent = TransferQueue.ReadCache<ActivityEntry[]>(state.HistoryPath) ?? [];
+        foreach (var entry in recent.TakeLast(Capacity))
+        {
+            if (entry != null && TransferQueue.IsSafeKey(entry.Key))
+            {
+                state.Recent.Enqueue(entry);
+            }
+        }
+
+        SetPending(TransferQueue.Open(directory).Entries);
+    }
+
+    internal void SetPending(IReadOnlyList<QueuedFile> entries)
+    {
+        lock (state)
+        {
+            state.Waiting.Clear();
+            foreach (var entry in entries)
+            {
+                state.Waiting.Add(entry.File.Key);
+            }
+
+            state.Revision++;
+        }
     }
 
     private SyncActivity(SharedState state)
@@ -47,6 +81,7 @@ internal sealed class SyncActivity
         lock (state)
         {
             current = new ActivityEntry(DateTime.Now, operation, key, UiText.Get("处理中"));
+            state.Waiting.Remove(key);
             state.Active.Add(this);
             state.Revision++;
         }
@@ -67,6 +102,18 @@ internal sealed class SyncActivity
             }
 
             state.Recent.Enqueue(current with { Time = DateTime.Now, Status = status });
+            if (state.HistoryPath != null)
+            {
+                try
+                {
+                    FolderPairStore.WriteJson(state.HistoryPath, state.Recent);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    Log.Logger.WriteFailure(LogEventLevel.Warning, "Save recent activity", ex);
+                }
+            }
+
             EndTransfer();
             current = null;
             state.Active.Remove(this);
@@ -74,12 +121,12 @@ internal sealed class SyncActivity
         }
     }
 
-    internal void BeginTransfer(string phase, long total)
+    internal void BeginTransfer(string phase, long total, long offset = 0)
     {
         lock (state)
         {
             EndTransfer();
-            transfer = new ActivityTransfer(++state.Revision, phase, 0, total, false);
+            transfer = new ActivityTransfer(++state.Revision, phase, offset, total, false, offset);
         }
     }
 
@@ -153,7 +200,7 @@ internal sealed class SyncActivity
             }
 
             var active = state.Active.Select(worker => new ActiveFile(worker.current!, worker.transfer)).ToArray();
-            return new ActivitySnapshot(state.Revision, active, state.Recent.Reverse().ToArray());
+            return new ActivitySnapshot(state.Revision, active, state.Recent.Reverse().ToArray(), state.Waiting.Take(Capacity).ToArray(), state.Waiting.Count);
         }
     }
 }
