@@ -6,13 +6,13 @@ internal sealed partial class DriveClient
     {
         if (string.IsNullOrWhiteSpace(name) || name is "." or ".." || name.IndexOfAny(['/', '\\', '\0']) >= 0)
         {
-            throw new InvalidDataException("文件名无效。");
+            throw new InvalidDataException(UiText.Get("文件名无效。"));
         }
 
         var folder = new Uri(parent, UriKind.Absolute);
         if (folder.Scheme != "cloudreve" || folder.Fragment.Length != 0)
         {
-            throw new InvalidDataException("无效的云端目录。");
+            throw new InvalidDataException(UiText.Get("无效的云端目录。"));
         }
 
         return folder.GetLeftPart(UriPartial.Path).TrimEnd('/') + "/" + Uri.EscapeDataString(name) + folder.Query;

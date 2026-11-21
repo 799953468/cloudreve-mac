@@ -11,6 +11,8 @@ namespace Cloudreve.Desktop;
 
 internal static class Program
 {
+    internal static DesktopPreferences Preferences { get; } = new(SessionFileStore.OpenDefault().DirectoryPath);
+
     [STAThread]
     private static int Main(string[] args)
     {
@@ -21,7 +23,9 @@ internal static class Program
         }
 
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        Log.Logger = DesktopLog.CreateLogger(Path.Combine(home, "Library", "Logs", "Cloudreve"));
+        Log.Logger = DesktopLog.CreateLogger(Path.Combine(home, "Library", "Logs", "Cloudreve"), Preferences.LogLevel);
+        Preferences.Load();
+        UiText.Language = Preferences.Current.Language;
         try
         {
             Log.Information("Starting Cloudreve Desktop");
@@ -53,54 +57,65 @@ internal sealed class DesktopApp : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            var window = new WorkspaceWindow();
+            WindowIcon appIcon;
+            using (var icon = AssetLoader.Open(new Uri("avares://CloudreveMac/Assets/cloudreve.png")))
+            {
+                appIcon = new WindowIcon(icon);
+            }
+
+            var host = new WorkspaceHost(new DriveProfiles(SessionFileStore.OpenDefault()), appIcon);
+            var window = host.OpenPrimary();
+            bool restored = false;
+            window.Opened += (_, _) =>
+            {
+                if (!restored)
+                {
+                    restored = true;
+                    host.RestoreOthers();
+                }
+            };
             if (TryGetFeature(typeof(IActivatableLifetime)) is IActivatableLifetime lifetime)
             {
                 lifetime.Activated += async (_, activation) =>
                 {
                     if (activation is ProtocolActivatedEventArgs protocol)
                     {
-                        window.Show();
-                        window.Activate();
-                        await window.AcceptCallbackAsync(protocol.Uri);
+                        await host.AcceptAsync(protocol.Uri);
                     }
                 };
             }
 
             var menu = new NativeMenu();
-            var show = new NativeMenuItem("打开工作区");
-            var refresh = new NativeMenuItem("刷新目录");
-            var quit = new NativeMenuItem("退出 Cloudreve");
-            show.Click += (_, _) =>
-            {
-                window.Show();
-                window.Activate();
-            };
-            refresh.Click += async (_, _) => { await window.RefreshAsync(); };
+            var show = new NativeMenuItem(UiText.Get("打开工作区"));
+            var drives = new NativeMenuItem(UiText.Get("云盘")) { Menu = host.Drives };
+            var add = new NativeMenuItem(UiText.Get("添加云盘…"));
+            var refresh = new NativeMenuItem(UiText.Get("刷新目录"));
+            var quit = new NativeMenuItem(UiText.Get("退出 Cloudreve"));
+            show.Click += (_, _) => { host.ShowActive(); };
+            add.Click += (_, _) => { host.OpenNew(); };
+            refresh.Click += async (_, _) => { await host.RefreshActiveAsync(); };
             quit.Click += (_, _) => { desktop.TryShutdown(); };
             menu.Items.Add(show);
+            menu.Items.Add(drives);
+            menu.Items.Add(add);
             menu.Items.Add(refresh);
+            menu.Items.Add(PreferencesMenu.Create(Program.Preferences, host.ReportFailure));
             menu.Items.Add(new NativeMenuItemSeparator());
             menu.Items.Add(quit);
 
-            using (var icon = AssetLoader.Open(new Uri("avares://CloudreveMac/Assets/cloudreve.png")))
+            var tray = new TrayIcon { Icon = appIcon, ToolTipText = "Cloudreve", Menu = menu, IsVisible = true };
+            TrayIcon.SetIcons(this, new TrayIcons { tray });
+            host.ActiveStatusChanged += (text, ready) =>
             {
-                var appIcon = new WindowIcon(icon);
-                window.Icon = appIcon;
-                var tray = new TrayIcon { Icon = appIcon, ToolTipText = "Cloudreve", Menu = menu, IsVisible = true };
-                TrayIcon.SetIcons(this, new TrayIcons { tray });
-                window.StatusChanged += (text, ready) =>
-                {
-                    tray.ToolTipText = text;
-                    refresh.IsEnabled = ready;
-                };
-                refresh.IsEnabled = false;
-                desktop.Exit += (_, _) =>
-                {
-                    window.Stop();
-                    tray.Dispose();
-                };
-            }
+                tray.ToolTipText = text;
+                refresh.IsEnabled = ready;
+            };
+            refresh.IsEnabled = false;
+            desktop.Exit += (_, _) =>
+            {
+                host.Stop();
+                tray.Dispose();
+            };
 
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
             bool stopping = false;
@@ -116,17 +131,9 @@ internal sealed class DesktopApp : Application
                 if (!stopping)
                 {
                     stopping = true;
-                    await window.PrepareToQuitAsync();
+                    await host.PrepareToQuitAsync();
                     readyToQuit = true;
                     Dispatcher.UIThread.Post(() => { desktop.TryShutdown(); });
-                }
-            };
-            window.Closing += (_, e) =>
-            {
-                if (e.CloseReason == WindowCloseReason.WindowClosing)
-                {
-                    e.Cancel = true;
-                    window.Hide();
                 }
             };
             desktop.MainWindow = window;

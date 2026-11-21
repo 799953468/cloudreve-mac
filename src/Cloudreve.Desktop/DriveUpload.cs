@@ -7,11 +7,11 @@ namespace Cloudreve.Desktop;
 
 internal sealed partial class DriveClient
 {
-    internal async Task UploadAsync(string path, string target, DriveEntry? previous, CancellationToken cancel)
+    internal async Task UploadAsync(string path, string target, DriveEntry? previous, CancellationToken cancel, SyncActivity? activity = null)
     {
         if (previous != null && (previous.IsFolder || previous.Uri != target || string.IsNullOrEmpty(previous.Version)))
         {
-            throw new InvalidDataException("无法确认远端文件版本，未覆盖。请刷新目录。");
+            throw new InvalidDataException(UiText.Get("无法确认远端文件版本，未覆盖。请刷新目录。"));
         }
 
         using (var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1, FileOptions.Asynchronous))
@@ -25,7 +25,7 @@ internal sealed partial class DriveClient
 
             var parameters = new Dictionary<string, object>
             {
-                ["uri"] = target, ["size"] = size, ["policy_id"] = "",
+                ["uri"] = target, ["size"] = size, ["policy_id"] = "", ["encryption_supported"] = new[] { UploadCipher.Algorithm },
                 ["last_modified"] = new DateTimeOffset(File.GetLastWriteTimeUtc(path)).ToUnixTimeMilliseconds()
             };
             if (previous != null)
@@ -38,7 +38,18 @@ internal sealed partial class DriveClient
             string id = DesktopLogin.Required(ticket, "session_id");
             try
             {
-                await TransferAsync(input, size, ticket, id, cancel);
+                using (var cipher = UploadCipher.FromTicket(ticket))
+                {
+                    activity?.BeginTransfer(UiText.Get("上传"), size);
+                    try
+                    {
+                        await TransferAsync(input, size, ticket, id, cipher, cancel, activity);
+                    }
+                    finally
+                    {
+                        activity?.EndTransfer();
+                    }
+                }
             }
             catch
             {
@@ -59,7 +70,7 @@ internal sealed partial class DriveClient
         }
     }
 
-    private async Task TransferAsync(FileStream input, long size, JsonElement ticket, string id, CancellationToken cancel)
+    private async Task TransferAsync(FileStream input, long size, JsonElement ticket, string id, UploadCipher? cipher, CancellationToken cancel, SyncActivity? activity)
     {
         string kind = "local";
         if (ticket.TryGetProperty("storage_policy", out var policy) && policy.ValueKind == JsonValueKind.Object &&
@@ -68,24 +79,20 @@ internal sealed partial class DriveClient
             kind = DesktopLogin.Required(policy, "type");
         }
 
-        if (ticket.TryGetProperty("encrypt_metadata", out var encryption) && encryption.ValueKind != JsonValueKind.Null)
-        {
-            throw new NotSupportedException("站点要求客户端加密；未发送明文。");
-        }
-
         string[] urls = ticket.TryGetProperty("upload_urls", out var addresses) && addresses.ValueKind == JsonValueKind.Array
-            ? addresses.EnumerateArray().Select(address => address.GetString() ?? "").ToArray() : [];
+            ? addresses.EnumerateArray().Select(address => address.GetString() ?? "").ToArray()
+            : [];
         long chunkSize = ticket.GetProperty("chunk_size").GetInt64();
         if (chunkSize < 0)
         {
-            throw new InvalidDataException("站点返回了无效的分片大小。");
+            throw new InvalidDataException(UiText.Get("站点返回了无效的分片大小。"));
         }
 
         long step = chunkSize == 0 || kind == "upyun" ? Math.Max(1, size) : chunkSize;
         long count = size == 0 ? 1 : (size - 1) / step + 1;
         if (count > int.MaxValue || (kind is "s3" or "ks3" or "cos" or "obs" or "oss" && urls.Length != count))
         {
-            throw new InvalidDataException("上传分片与站点返回的地址不匹配。");
+            throw new InvalidDataException(UiText.Get("上传分片与站点返回的地址不匹配。"));
         }
 
         var tags = new List<string>();
@@ -96,7 +103,7 @@ internal sealed partial class DriveClient
             if (kind is "local" or "remote" or "load_balance" && (urls.Length == 0 || string.IsNullOrEmpty(urls[0]) || urls[0].StartsWith('/')))
             {
                 using (var response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Post, ApiUri($"file/upload/{Uri.EscapeDataString(id)}/{i}"))
-                       { Content = new FileSliceContent(input.SafeFileHandle, offset, length) }, cancel))
+                           { Content = new FileSliceContent(input.SafeFileHandle, offset, length, cipher, activity) }, cancel))
                 {
                     response.EnsureSuccessStatusCode();
                     DesktopLogin.Envelope(await response.Content.ReadFromJsonAsync<JsonElement>(cancel));
@@ -107,23 +114,29 @@ internal sealed partial class DriveClient
 
             if (urls.Length == 0)
             {
-                throw new InvalidDataException("站点未返回上传地址。");
+                throw new InvalidDataException(UiText.Get("站点未返回上传地址。"));
             }
 
             using (var request = new HttpRequestMessage())
             {
-                request.Content = new FileSliceContent(input.SafeFileHandle, offset, length);
+                request.Content = new FileSliceContent(input.SafeFileHandle, offset, length, cipher, activity);
                 request.RequestUri = StorageUri(urls[0]);
                 switch (kind)
                 {
-                    case "local": case "remote": case "load_balance":
+                    case "local":
+                    case "remote":
+                    case "load_balance":
                         var slave = new UriBuilder(request.RequestUri);
                         slave.Query = (slave.Query.Length > 1 ? slave.Query[1..] + "&" : "") + "chunk=" + i;
                         request.RequestUri = slave.Uri;
                         request.Method = HttpMethod.Post;
                         request.Headers.Add("Authorization", DesktopLogin.Required(ticket, "credential"));
                         break;
-                    case "s3": case "cos": case "ks3": case "obs": case "oss":
+                    case "s3":
+                    case "cos":
+                    case "ks3":
+                    case "obs":
+                    case "oss":
                         request.Method = HttpMethod.Put;
                         request.RequestUri = StorageUri(urls[i]);
                         break;
@@ -147,7 +160,7 @@ internal sealed partial class DriveClient
                         request.Content = form;
                         break;
                     default:
-                        throw new NotSupportedException($"该文件不支持使用 {kind} 策略上传。");
+                        throw new NotSupportedException(UiText.Format($"该文件不支持使用 {kind} 策略上传。"));
                 }
 
                 using (var response = await storage.SendAsync(request, cancel))
@@ -155,7 +168,7 @@ internal sealed partial class DriveClient
                     response.EnsureSuccessStatusCode();
                     if (kind is "s3" or "cos" or "ks3" or "obs")
                     {
-                        tags.Add(response.Headers.ETag?.Tag.Trim('"') ?? throw new InvalidDataException("存储服务缺少分片 ETag。"));
+                        tags.Add(response.Headers.ETag?.Tag.Trim('"') ?? throw new InvalidDataException(UiText.Get("存储服务缺少分片 ETag。")));
                     }
                     else if (kind == "qiniu")
                     {
@@ -177,7 +190,7 @@ internal sealed partial class DriveClient
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.UserInfo.Length != 0 || uri.Fragment.Length != 0 ||
             !(uri.Scheme == "https" || uri.Scheme == "http" && new Uri(session.Site).Scheme == "http"))
         {
-            throw new InvalidDataException("不安全或无效的存储地址。");
+            throw new InvalidDataException(UiText.Get("不安全或无效的存储地址。"));
         }
 
         return uri;
@@ -217,7 +230,7 @@ internal sealed partial class DriveClient
                     string body = await response.Content.ReadAsStringAsync(cancel);
                     if (body.AsSpan().TrimStart().StartsWith("<") && XElement.Parse(body).Name.LocalName == "Error")
                     {
-                        throw new IOException("存储服务未能合并分片。");
+                        throw new IOException(UiText.Get("存储服务未能合并分片。"));
                     }
                 }
             }

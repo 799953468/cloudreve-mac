@@ -11,12 +11,16 @@ internal sealed class FileSliceContent : HttpContent
     private readonly SafeFileHandle file;
     private readonly long offset;
     private readonly long length;
+    private readonly UploadCipher? cipher;
+    private readonly SyncActivity? activity;
 
-    internal FileSliceContent(SafeFileHandle file, long offset, long length)
+    internal FileSliceContent(SafeFileHandle file, long offset, long length, UploadCipher? cipher = null, SyncActivity? activity = null)
     {
         this.file = file;
         this.offset = offset;
         this.length = length;
+        this.cipher = cipher;
+        this.activity = activity;
         Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
         Headers.ContentLength = length;
     }
@@ -40,15 +44,22 @@ internal sealed class FileSliceContent : HttpContent
             long sent = 0;
             while (sent < length)
             {
+                if (activity != null)
+                {
+                    await activity.WaitForResumeAsync(cancel);
+                }
+
                 int wanted = (int)Math.Min(buffer.Length, length - sent);
                 int read = await RandomAccess.ReadAsync(file, buffer.AsMemory(0, wanted), offset + sent, cancel);
                 if (read == 0)
                 {
-                    throw new EndOfStreamException("上传期间源文件被截短。");
+                    throw new EndOfStreamException(UiText.Get("上传期间源文件被截短。"));
                 }
 
+                cipher?.Apply(buffer.AsSpan(0, read), offset + sent);
                 await stream.WriteAsync(buffer.AsMemory(0, read), cancel);
                 sent += read;
+                activity?.ReportBytes(offset + sent);
             }
         }
         finally

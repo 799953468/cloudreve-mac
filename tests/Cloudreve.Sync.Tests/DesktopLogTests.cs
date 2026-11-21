@@ -1,5 +1,6 @@
 using System.Net;
 using Cloudreve.Desktop;
+using Serilog;
 using Serilog.Events;
 using Xunit;
 
@@ -7,6 +8,38 @@ namespace Cloudreve.Sync.Tests;
 
 public sealed class DesktopLogTests
 {
+    [Fact]
+    public void PreferencesPersistAndChangeTheActiveLogThreshold()
+    {
+        var root = Directory.CreateTempSubdirectory();
+        try
+        {
+            string directory = Cloudreve.Sync.MacFile.NormalizeSystemPath(root.FullName);
+            var settings = new DesktopPreferences(directory);
+            using (var logger = DesktopLog.CreateLogger(directory, settings.LogLevel))
+            {
+                logger.Debug("Not visible");
+                settings.Save(new DisplayPreferences(LogEventLevel.Debug, false, UiLanguage.English));
+                logger.Debug("Visible after change");
+            }
+
+            var restored = new DesktopPreferences(directory);
+            restored.Load();
+            Assert.Equal(settings.Current, restored.Current);
+            string log = File.ReadAllText(Assert.Single(Directory.GetFiles(directory, "desktop-*.log")));
+            Assert.Contains("Visible after change", log);
+            Assert.DoesNotContain("Not visible", log);
+            File.WriteAllText(Path.Combine(directory, "preferences.json"), "invalid");
+            var defaults = new DesktopPreferences(directory);
+            defaults.Load();
+            Assert.Equal(new DisplayPreferences(), defaults.Current);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
     [Fact]
     public void WritesFailureDiagnosticsWithoutExceptionMessages()
     {

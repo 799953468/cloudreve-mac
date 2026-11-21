@@ -2,7 +2,12 @@ using System.Runtime.InteropServices;
 
 namespace Cloudreve.Sync;
 
-internal enum NodeKind { File, Directory, Unsupported }
+internal enum NodeKind
+{
+    File,
+    Directory,
+    Unsupported
+}
 
 internal static partial class MacFile
 {
@@ -36,6 +41,30 @@ internal static partial class MacFile
     private struct TypeBuffer
     {
         public uint Length, ObjectType;
+    }
+
+    // Darwin packs getattrlist result attributes on four-byte boundaries, including timespec and file ID.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    private struct IdentityBuffer
+    {
+        public uint Length, VolumeLow, VolumeHigh;
+        public long CreatedSeconds, CreatedNanoseconds;
+        public ulong FileId;
+    }
+
+    [LibraryImport("libSystem.B.dylib", EntryPoint = "getattrlist", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
+    private static partial int ReadIdentity(string path, ref AttributeList attributes, out IdentityBuffer result, nuint size, nuint options);
+
+    internal static string? Identity(string path)
+    {
+        var attributes = new AttributeList { Count = 5, Common = 0x00000004 | 0x00000200 | 0x02000000 };
+        nuint size = (nuint)Marshal.SizeOf<IdentityBuffer>();
+        if (ReadIdentity(path, ref attributes, out var result, size, 1) != 0 || result.Length != size || result.FileId == 0)
+        {
+            return null;
+        }
+
+        return $"{result.VolumeHigh:X8}{result.VolumeLow:X8}:{result.FileId:X16}:{result.CreatedSeconds:X16}:{result.CreatedNanoseconds:X8}";
     }
 
     [LibraryImport("libSystem.B.dylib", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]

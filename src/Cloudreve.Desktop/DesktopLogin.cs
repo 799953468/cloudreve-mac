@@ -27,7 +27,7 @@ internal sealed class DesktopLogin
             (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp) ||
             uri.UserInfo.Length != 0 || uri.Query.Length != 0 || uri.Fragment.Length != 0 || uri.AbsolutePath != "/")
         {
-            throw new ArgumentException("请输入以 http:// 或 https:// 开头的站点根地址，不要包含账号、密码、子路径、查询参数或片段。");
+            throw new ArgumentException(UiText.Get("请输入以 http:// 或 https:// 开头的站点根地址，不要包含账号、密码、子路径、查询参数或片段。"));
         }
 
         site = new Uri(uri.GetLeftPart(UriPartial.Authority));
@@ -47,7 +47,7 @@ internal sealed class DesktopLogin
 
             if (!Version.TryParse(version, out Version? parsed) || parsed < new Version(4, 12, 0))
             {
-                throw new InvalidDataException("桌面连接需要 Cloudreve 4.12.0 或更高版本。");
+                throw new InvalidDataException(UiText.Get("桌面连接需要 Cloudreve 4.12.0 或更高版本。"));
             }
         }
 
@@ -56,30 +56,35 @@ internal sealed class DesktopLogin
             $"/session/authorize?response_type=code&client_id={ClientId}&scope={Uri.EscapeDataString(Scope)}&redirect_uri=%2Fcallback%2Fdesktop&code_challenge={challenge}&code_challenge_method=S256&state={state}");
     }
 
+    internal bool MatchesCallback(Uri callback)
+    {
+        return callback.IsAbsoluteUri && callback.Scheme == "cloudreve" && callback.Host == "mount" &&
+               callback.AbsolutePath.Trim('/').Length == 0 && callback.UserInfo.Length == 0 && callback.IsDefaultPort &&
+               callback.Fragment.Length == 0 && HttpUtility.ParseQueryString(callback.Query)["state"] == state;
+    }
+
     internal async Task<DriveSession> CompleteAsync(Uri callback, CancellationToken cancel)
     {
         var values = HttpUtility.ParseQueryString(callback.Query);
-        if (callback.Scheme != "cloudreve" || callback.Host != "mount" || callback.AbsolutePath.Trim('/').Length != 0 ||
-            callback.UserInfo.Length != 0 || !callback.IsDefaultPort || callback.Fragment.Length != 0 ||
-            values["state"] != state || DateTimeOffset.UtcNow >= deadline)
+        if (!MatchesCallback(callback) || DateTimeOffset.UtcNow >= deadline)
         {
-            throw new InvalidDataException("回调与当前授权不匹配或已过期。");
+            throw new InvalidDataException(UiText.Get("回调与当前授权不匹配或已过期。"));
         }
 
         if (Interlocked.Exchange(ref consumed, 1) != 0)
         {
-            throw new InvalidOperationException("本次授权回调已使用。");
+            throw new InvalidOperationException(UiText.Get("本次授权回调已使用。"));
         }
 
         if (values["error"] != null || string.IsNullOrWhiteSpace(values["code"]))
         {
-            throw new InvalidDataException("站点未批准本次授权。");
+            throw new InvalidDataException(UiText.Get("站点未批准本次授权。"));
         }
 
         string root = values["path"] ?? "";
         if (!Uri.TryCreate(root, UriKind.Absolute, out var driveRoot) || driveRoot.Scheme != "cloudreve" || string.IsNullOrEmpty(driveRoot.Host))
         {
-            throw new InvalidDataException("授权回调缺少有效云端目录。");
+            throw new InvalidDataException(UiText.Get("授权回调缺少有效云端目录。"));
         }
 
         using (var form = new FormUrlEncodedContent(new Dictionary<string, string>
@@ -103,7 +108,7 @@ internal sealed class DesktopLogin
         int code = json.GetProperty("code").GetInt32();
         if (code != 0)
         {
-            throw new IOException($"Cloudreve 请求失败（{code}）：{(json.TryGetProperty("msg", out var msg) ? msg.GetString() : "")} ");
+            throw new IOException(UiText.Format($"Cloudreve 请求失败（{code}）：{(json.TryGetProperty("msg", out var msg) ? msg.GetString() : "")} "));
         }
 
         if (json.TryGetProperty("data", out var data))
@@ -118,13 +123,13 @@ internal sealed class DesktopLogin
     {
         if (string.IsNullOrEmpty(serverUser) || (candidate.UserId.Length > 0 && candidate.UserId != serverUser))
         {
-            throw new InvalidDataException("授权回调与服务器账号不匹配。");
+            throw new InvalidDataException(UiText.Get("授权回调与服务器账号不匹配。"));
         }
 
         if (previous != null && (previous.UserId != serverUser || new Uri(previous.Site) != new Uri(candidate.Site) ||
                                  new Uri(previous.Root) != new Uri(candidate.Root)))
         {
-            throw new InvalidDataException("重新授权必须选择原账号与原目录；更换云盘请先断开连接。");
+            throw new InvalidDataException(UiText.Get("重新授权必须选择原账号与原目录；更换云盘请先断开连接。"));
         }
 
         return candidate with { UserId = serverUser, DriveId = previous?.DriveId ?? candidate.DriveId };
@@ -135,7 +140,7 @@ internal sealed class DesktopLogin
         string? value = json.GetProperty(key).GetString();
         if (string.IsNullOrEmpty(value))
         {
-            throw new InvalidDataException($"Cloudreve 响应缺少 {key}。");
+            throw new InvalidDataException(UiText.Format($"Cloudreve 响应缺少 {key}。"));
         }
 
         return value;

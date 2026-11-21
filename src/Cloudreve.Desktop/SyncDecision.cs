@@ -1,10 +1,17 @@
 namespace Cloudreve.Desktop;
 
-internal sealed record FileBaseline(string LocalHash, string RemoteVersion);
+internal sealed record FileBaseline(string LocalHash, string RemoteVersion, string? LocalId = null, string? RemoteId = null, bool IsDirectory = false);
 
 internal enum SyncAction
 {
-    Forget, Unchanged, Upload, Download, CompareContents, TrashRemote, RecoverLocal, Conflict
+    Forget,
+    Unchanged,
+    Upload,
+    Download,
+    CompareContents,
+    TrashRemote,
+    RecoverLocal,
+    Conflict
 }
 
 internal static class SyncDecision

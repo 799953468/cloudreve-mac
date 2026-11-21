@@ -6,7 +6,7 @@ using System.Text.Json;
 
 namespace Cloudreve.Desktop;
 
-internal sealed record DriveEntry(string Name, string Uri, bool IsFolder, long Size, string? Version = null, bool SkipSync = false)
+internal sealed record DriveEntry(string Name, string Uri, bool IsFolder, long Size, string? Version = null, bool SkipSync = false, string? Id = null)
 {
     public override string ToString()
     {
@@ -36,7 +36,7 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
 
             if (session.RefreshExpires <= DateTimeOffset.UtcNow)
             {
-                throw new InvalidOperationException("授权已过期，请重新授权。");
+                throw new InvalidOperationException(UiText.Get("授权已过期，请重新授权。"));
             }
 
             // Once sent, finish token rotation even if directory navigation cancels its original caller.
@@ -109,8 +109,9 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
             JsonElement data = await JsonAsync(HttpMethod.Get, path + continuation, null, cancel);
             if (data.TryGetProperty("recursion_limit_reached", out var limited) && limited.ValueKind == JsonValueKind.True)
             {
-                throw new InvalidDataException("目录列表不完整，请稍后重试。");
+                throw new InvalidDataException(UiText.Get("目录列表不完整，请稍后重试。"));
             }
+
             foreach (var file in data.GetProperty("files").EnumerateArray())
             {
                 entries.Add(ParseEntry(file));
@@ -128,7 +129,7 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
                 long count = total.GetInt64();
                 if (count < 0 || expectedCount.HasValue && count != expectedCount)
                 {
-                    throw new InvalidDataException("读取期间目录已变化。");
+                    throw new InvalidDataException(UiText.Get("读取期间目录已变化。"));
                 }
 
                 expectedCount = count;
@@ -143,13 +144,13 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
 
             if (expectedCount.HasValue && expectedCount != entries.Count)
             {
-                throw new InvalidDataException("目录列表不完整，请稍后重试。");
+                throw new InvalidDataException(UiText.Get("目录列表不完整，请稍后重试。"));
             }
 
             return entries;
         }
 
-        throw new InvalidDataException("服务端重复返回同一分页位置。");
+        throw new InvalidDataException(UiText.Get("服务端重复返回同一分页位置。"));
     }
 
     private static DriveEntry ParseEntry(JsonElement file)
@@ -157,13 +158,14 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
         int type = file.GetProperty("type").GetInt32();
         return new DriveEntry(DesktopLogin.Required(file, "name"), DesktopLogin.Required(file, "path"),
             type == 1, file.GetProperty("size").GetInt64(),
-            file.TryGetProperty("primary_entity", out var version) ? version.GetString() : null, type is not (0 or 1) || HasSyncExclusion(file));
+            file.TryGetProperty("primary_entity", out var version) ? version.GetString() : null, type is not (0 or 1) || HasSyncExclusion(file),
+            file.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String ? id.GetString() : null);
     }
 
     private static bool HasSyncExclusion(JsonElement file)
     {
         return file.TryGetProperty("metadata", out var metadata) && metadata.ValueKind == JsonValueKind.Object &&
-            (metadata.TryGetProperty("sys:shared_redirect", out _) || metadata.TryGetProperty("sys:upload_session_id", out _));
+               (metadata.TryGetProperty("sys:shared_redirect", out _) || metadata.TryGetProperty("sys:upload_session_id", out _));
     }
 
     internal async Task<string> FolderIdAsync(string uri, CancellationToken cancel)
@@ -172,7 +174,7 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
         if (data.GetProperty("type").GetInt32() != 1 || HasSyncExclusion(data) ||
             !PairInventory.SameUri(uri.TrimEnd('/'), DesktopLogin.Required(data, "path").TrimEnd('/')))
         {
-            throw new InvalidDataException("无法确认配对的云端目录。");
+            throw new InvalidDataException(UiText.Get("无法确认配对的云端目录。"));
         }
 
         return DesktopLogin.Required(data, "id");
@@ -183,7 +185,7 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
         return ParseEntry(await JsonAsync(HttpMethod.Get, "file/info?uri=" + Uri.EscapeDataString(uri), null, cancel));
     }
 
-    internal async Task DownloadAsync(DriveEntry file, string destination, CancellationToken cancel)
+    internal async Task DownloadAsync(DriveEntry file, string destination, CancellationToken cancel, SyncActivity? activity = null)
     {
         var parameters = new Dictionary<string, object> { ["uris"] = new[] { file.Uri }, ["download"] = true };
         if (!string.IsNullOrEmpty(file.Version))
@@ -197,7 +199,7 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
         if (urls.GetArrayLength() != 1 || !Uri.TryCreate(site, DesktopLogin.Required(urls[0], "url"), out var url) || url.UserInfo.Length > 0 ||
             (url.Scheme != Uri.UriSchemeHttps && !(url.Scheme == Uri.UriSchemeHttp && (site.Scheme == Uri.UriSchemeHttp || url.IsLoopback))))
         {
-            throw new InvalidDataException("站点未返回可用的下载地址。");
+            throw new InvalidDataException(UiText.Get("站点未返回可用的下载地址。"));
         }
 
         // The signed URL can point at a different host. Never attach site credentials.
@@ -209,10 +211,43 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
             {
                 try
                 {
-                    await response.Content.CopyToAsync(output, cancel);
+                    activity?.BeginTransfer(UiText.Get("读取云端内容"), file.Size);
+                    try
+                    {
+                        using (var input = await response.Content.ReadAsStreamAsync(cancel))
+                        {
+                            byte[] buffer = new byte[81920];
+                            while (true)
+                            {
+                                if (activity != null)
+                                {
+                                    await activity.WaitForResumeAsync(cancel);
+                                }
+
+                                int read = await input.ReadAsync(buffer, cancel);
+                                if (read == 0)
+                                {
+                                    break;
+                                }
+
+                                if (read > file.Size - output.Position)
+                                {
+                                    throw new InvalidDataException(UiText.Get("下载内容超过预期大小。"));
+                                }
+
+                                await output.WriteAsync(buffer.AsMemory(0, read), cancel);
+                                activity?.ReportBytes(output.Position);
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        activity?.EndTransfer();
+                    }
+
                     if (output.Length != file.Size)
                     {
-                        throw new InvalidDataException("文件大小已变化或下载不完整，请刷新后重试。");
+                        throw new InvalidDataException(UiText.Get("文件大小已变化或下载不完整，请刷新后重试。"));
                     }
 
                     output.Close();
@@ -246,7 +281,7 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
                     response.EnsureSuccessStatusCode();
                     if (response.Content.Headers.ContentType?.MediaType != "text/event-stream")
                     {
-                        throw new InvalidDataException("站点未提供目录事件流，可手动刷新。");
+                        throw new InvalidDataException(UiText.Get("站点未提供目录事件流，可手动刷新。"));
                     }
 
                     using (var stream = await response.Content.ReadAsStreamAsync(cancel))

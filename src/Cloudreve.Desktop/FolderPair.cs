@@ -29,7 +29,7 @@ internal sealed class FolderPairStore
             return null;
         }
 
-        return JsonSerializer.Deserialize<FolderPair>(File.ReadAllText(path)) ?? throw new InvalidDataException("同步配对记录无效。");
+        return JsonSerializer.Deserialize<FolderPair>(File.ReadAllText(path)) ?? throw new InvalidDataException(UiText.Get("同步配对记录无效。"));
     }
 
     internal FolderPair Create(string localDirectory, string remote, string remoteId)
@@ -38,12 +38,12 @@ internal sealed class FolderPairStore
         CheckDirectory(local);
         if (IsWithin(settings, local) || IsWithin(local, settings))
         {
-            throw new IOException("同步目录不能包含应用的设置目录。");
+            throw new IOException(UiText.Get("同步目录不能包含应用的设置目录。"));
         }
 
         if (Load() != null)
         {
-            throw new IOException("请先停止原目录配对。");
+            throw new IOException(UiText.Get("请先停止原目录配对。"));
         }
 
         ArgumentException.ThrowIfNullOrWhiteSpace(remoteId);
@@ -84,6 +84,7 @@ internal sealed class FolderPairStore
 
             File.Delete(Path.Combine(directory, "pair.json"));
             File.Delete(BaselinePath(pair));
+            File.Delete(RulesPath(pair));
         }
     }
 
@@ -93,7 +94,7 @@ internal sealed class FolderPairStore
         string path = Path.Combine(pair.Local, MarkerName);
         if (MacFile.Inspect(path) != NodeKind.File || new FileInfo(path).Length > 128 || File.ReadAllText(path) != pair.Marker.ToString("N"))
         {
-            throw new IOException("本地同步目录已移动、被替换或磁盘未挂载；未同步。");
+            throw new IOException(UiText.Get("本地同步目录已移动、被替换或磁盘未挂载；未同步。"));
         }
     }
 
@@ -105,12 +106,49 @@ internal sealed class FolderPairStore
             return [];
         }
 
-        return JsonSerializer.Deserialize<Dictionary<string, FileBaseline>>(File.ReadAllText(path)) ?? throw new InvalidDataException("同步基线无效。");
+        return JsonSerializer.Deserialize<Dictionary<string, FileBaseline>>(File.ReadAllText(path)) ?? throw new InvalidDataException(UiText.Get("同步基线无效。"));
     }
 
     internal void SaveBaseline(FolderPair pair, Dictionary<string, FileBaseline> baseline)
     {
         WriteJson(BaselinePath(pair), baseline);
+    }
+
+    private string RulesPath(FolderPair pair)
+    {
+        return Path.Combine(directory, pair.Marker.ToString("N") + ".ignore.json");
+    }
+
+    internal string ReadRules(FolderPair pair)
+    {
+        string path = RulesPath(pair);
+        if (!File.Exists(path))
+        {
+            return "";
+        }
+
+        return JsonSerializer.Deserialize<string>(File.ReadAllText(path)) ?? throw new InvalidDataException(UiText.Get("配对忽略规则无效。"));
+    }
+
+    internal void SaveRules(FolderPair pair, string text)
+    {
+        var next = new PairIgnoreRules(text);
+        using (Lock(pair))
+        {
+            var previous = new PairIgnoreRules(ReadRules(pair));
+            var baseline = ReadBaseline(pair);
+            // Re-included paths must merge from scratch; never replay deletions from the ignored interval.
+            foreach (string key in baseline.Keys.ToArray())
+            {
+                if (previous.Excludes(key, baseline[key].IsDirectory) || next.Excludes(key, baseline[key].IsDirectory))
+                {
+                    baseline.Remove(key);
+                }
+            }
+
+            SaveBaseline(pair, baseline);
+            WriteJson(RulesPath(pair), text);
+        }
     }
 
     internal FileStream Lock(FolderPair pair)
@@ -120,7 +158,7 @@ internal sealed class FolderPairStore
         {
             if (Load() != pair)
             {
-                throw new IOException("同步配对已更改。");
+                throw new IOException(UiText.Get("同步配对已更改。"));
             }
 
             return lease;
@@ -143,7 +181,7 @@ internal sealed class FolderPairStore
         {
             if (MacFile.Inspect(dir.FullName) != NodeKind.Directory)
             {
-                throw new IOException("同步目录不存在，或路径包含链接。");
+                throw new IOException(UiText.Get("同步目录不存在，或路径包含链接。"));
             }
         }
     }

@@ -39,7 +39,7 @@ internal sealed class SessionFileStore
             }
             catch (JsonException)
             {
-                throw new InvalidDataException("本机登录文件格式无效，请重新连接云盘。");
+                throw new InvalidDataException(UiText.Get("本机登录文件格式无效，请重新连接云盘。"));
             }
         }
     }
@@ -94,7 +94,7 @@ internal sealed class SessionFileStore
         {
             if (MacFile.Inspect(entry.FullName) is not (null or NodeKind.Directory))
             {
-                throw new IOException("登录配置目录不能是链接或普通文件。");
+                throw new IOException(UiText.Get("登录配置目录不能是链接或普通文件。"));
             }
         }
 
@@ -117,7 +117,7 @@ internal sealed class SessionFileStore
         var kind = MacFile.Inspect(path);
         if (kind is not (null or NodeKind.File))
         {
-            throw new IOException("登录配置必须是普通文件，不能是链接。");
+            throw new IOException(UiText.Get("登录配置必须是普通文件，不能是链接。"));
         }
 
         return kind == NodeKind.File;
@@ -145,7 +145,7 @@ internal sealed class SessionFileStore
             string.IsNullOrWhiteSpace(session.AccessToken) || string.IsNullOrWhiteSpace(session.RefreshToken) ||
             session.AccessExpires == default || session.RefreshExpires == default)
         {
-            throw new InvalidDataException("本机登录记录无效，请重新连接云盘。");
+            throw new InvalidDataException(UiText.Get("本机登录记录无效，请重新连接云盘。"));
         }
 
         return session;

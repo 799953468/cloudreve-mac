@@ -27,14 +27,14 @@
       </ScrollViewer.Styles>
       <StackPanel MaxWidth="432" Margin="32,16" VerticalAlignment="Center" Spacing="8">
         <Image Source="/Assets/cloudreve.png" Width="120" Height="120" Margin="0,0,0,32" />
-        <TextBlock x:Name="SetupTitle" Text="连接云盘" FontSize="24" FontWeight="Medium" TextAlignment="Center" />
-        <TextBlock x:Name="SetupHint" Classes="secondary" Text="输入 Cloudreve 站点地址，在浏览器中完成授权。" TextAlignment="Center" TextWrapping="Wrap" />
+        <TextBlock x:Name="SetupTitle" Text="{local:Tr '连接云盘'}" FontSize="24" FontWeight="Medium" TextAlignment="Center" />
+        <TextBlock x:Name="SetupHint" Classes="secondary" Text="{local:Tr '输入 Cloudreve 站点地址，在浏览器中完成授权。'}" TextAlignment="Center" TextWrapping="Wrap" />
         <StackPanel x:Name="AddressField" Spacing="4" Margin="0,12,0,0">
-          <Label Content="站点地址（HTTP 或 HTTPS）" Target="{Binding #Endpoint}" Padding="0" FontSize="12" />
-          <TextBox x:Name="Endpoint" Classes="filled" PlaceholderText="https://cloud.example.com" AutomationProperties.Name="站点地址" MinHeight="56" Padding="12,8" VerticalContentAlignment="Center" />
+          <Label Content="{local:Tr '站点地址（HTTP 或 HTTPS）'}" Target="{Binding #Endpoint}" Padding="0" FontSize="12" />
+          <TextBox x:Name="Endpoint" Classes="filled" PlaceholderText="https://cloud.example.com" AutomationProperties.Name="{local:Tr '站点地址'}" MinHeight="56" Padding="12,8" VerticalContentAlignment="Center" />
         </StackPanel>
-        <Button x:Name="ConnectButton" Classes="primary" Content="连接云盘" Margin="0,8,0,0" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" IsDefault="True" />
-        <Button x:Name="CancelLogin" Classes="tool" Content="返回" Margin="0,8,0,0" HorizontalAlignment="Stretch" IsVisible="False" />
+        <Button x:Name="ConnectButton" Classes="primary" Content="{local:Tr '连接云盘'}" Margin="0,8,0,0" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" IsDefault="True" />
+        <Button x:Name="CancelLogin" Classes="tool" Content="{local:Tr '返回'}" Margin="0,8,0,0" HorizontalAlignment="Stretch" IsVisible="False" />
       </StackPanel>
     </ScrollViewer>
     <Grid x:Name="Workspace" Grid.Row="0" RowDefinitions="Auto,Auto,*,Auto,Auto" IsVisible="False">
@@ -47,8 +47,8 @@
                 <Path Canvas.Left="55.19182" Canvas.Top="-51.5495" Data="{StaticResource WordmarkLetters}" Fill="{DynamicResource BrandInk}" />
               </Canvas>
             </Viewbox>
-            <Button x:Name="ReauthorizeButton" Grid.Column="1" Classes="tool" Content="重新授权" />
-            <Button x:Name="DisconnectButton" Grid.Column="2" Classes="tool" Content="断开连接" />
+            <Button x:Name="ReauthorizeButton" Grid.Column="1" Classes="tool" Content="{local:Tr '重新授权'}" />
+            <Button x:Name="DisconnectButton" Grid.Column="2" Classes="tool" Content="{local:Tr '断开连接'}" />
           </Grid>
           <Grid Grid.Row="1" ColumnDefinitions="Auto,*" ColumnSpacing="12">
             <Border Background="{DynamicResource SelectedFill}" CornerRadius="12" Padding="8,2" MinHeight="24" MaxWidth="180">
@@ -58,19 +58,34 @@
           </Grid>
         </Grid>
       </Border>
-      <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto" ColumnSpacing="4" Margin="16,8">
-        <Button x:Name="BackButton" Classes="tool icon" ToolTip.Tip="上一级" AutomationProperties.Name="上一级" Width="32" Height="32" HorizontalContentAlignment="Center">
+      <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto" ColumnSpacing="4" Margin="16,8">
+        <Button x:Name="BackButton" Classes="tool icon" ToolTip.Tip="{local:Tr '上一级'}" AutomationProperties.Name="{local:Tr '上一级'}" Width="32" Height="32" HorizontalContentAlignment="Center">
           <PathIcon Width="16" Height="16" Data="M20,12 L12,4 L4,12 L5.5,13.5 L11,8 V21 H13 V8 L18.5,13.5 Z" />
         </Button>
-        <Button x:Name="RefreshButton" Grid.Column="1" Classes="tool icon" ToolTip.Tip="刷新目录" AutomationProperties.Name="刷新目录" Width="32" Height="32" HorizontalContentAlignment="Center">
+        <Button x:Name="RefreshButton" Grid.Column="1" Classes="tool icon" ToolTip.Tip="{local:Tr '刷新目录'}" AutomationProperties.Name="{local:Tr '刷新目录'}" Width="32" Height="32" HorizontalContentAlignment="Center">
           <PathIcon Width="16" Height="16" Data="M17.65,6.35 A8,8 0 1 0 20,14 H17.9 A6,6 0 1 1 16.2,7.8 L13,11 H21 V3 Z" />
         </Button>
-        <Button x:Name="OpenFolderButton" Grid.Column="3" Classes="tool" Content="打开目录" />
-        <Button x:Name="DownloadButton" Grid.Column="4" Classes="tool" Content="下载…" />
-        <Button x:Name="UploadButton" Grid.Column="5" Classes="tool" Content="上传…" />
+        <Button x:Name="OpenFolderButton" Grid.Column="3" Classes="tool" Content="{local:Tr '打开目录'}" />
+        <Button x:Name="DownloadButton" Grid.Column="4" Classes="tool" Content="{local:Tr '下载…'}" />
+        <Button x:Name="UploadButton" Grid.Column="5" Classes="tool" Content="{local:Tr '上传…'}" />
+        <Button x:Name="ManageButton" Grid.Column="6" Classes="tool" Content="{local:Tr '更多'}" AutomationProperties.Name="{local:Tr '云端文件操作'}">
+          <Button.Flyout>
+            <MenuFlyout>
+              <MenuItem x:Name="NewFolderItem" Header="{local:Tr '新建文件夹…'}" />
+              <MenuItem x:Name="RenameItem" Header="{local:Tr '重命名…'}" />
+              <MenuItem x:Name="MoveItem" Header="{local:Tr '移动到…'}" />
+              <Separator />
+              <MenuItem x:Name="TrashItem" Header="{local:Tr '移到云端回收站…'}" />
+              <Separator />
+              <MenuItem x:Name="IgnoreItem" Header="{local:Tr '配对忽略规则…'}" />
+              <MenuItem x:Name="ConflictsItem" Header="{local:Tr '处理同步冲突…'}" />
+              <MenuItem x:Name="ActivityItem" Header="{local:Tr '同步活动…'}" />
+            </MenuFlyout>
+          </Button.Flyout>
+        </Button>
       </Grid>
       <Grid Grid.Row="2">
-        <ListBox x:Name="Files" Background="Transparent" BorderThickness="0" AutomationProperties.Name="云端文件">
+        <ListBox x:Name="Files" Background="Transparent" BorderThickness="0" AutomationProperties.Name="{local:Tr '云端文件'}">
           <ListBox.ItemTemplate>
             <DataTemplate x:DataType="local:DriveEntry" x:CompileBindings="True">
               <Grid ColumnDefinitions="28,*,Auto" ColumnSpacing="12" MinHeight="28">
@@ -84,21 +99,21 @@
         </ListBox>
         <StackPanel x:Name="EmptyFolder" IsVisible="False" VerticalAlignment="Center" Spacing="8" IsHitTestVisible="False">
           <PathIcon Data="{StaticResource FolderIcon}" Width="48" Height="38" Foreground="{DynamicResource Muted}" Opacity="0.5" />
-          <TextBlock Text="此目录为空" Classes="secondary" TextAlignment="Center" />
+          <TextBlock Text="{local:Tr '此目录为空'}" Classes="secondary" TextAlignment="Center" />
         </StackPanel>
       </Grid>
       <TextBlock x:Name="Changes" Grid.Row="3" Margin="16,4" FontSize="12" Classes="secondary" TextWrapping="Wrap" IsVisible="{Binding Text.Length, RelativeSource={RelativeSource Self}, FallbackValue=False}" />
       <Grid Grid.Row="4" Margin="16,4,16,8" RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
         <TextBlock x:Name="PairLocation" Classes="secondary" VerticalAlignment="Center" FontSize="12" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Text, RelativeSource={RelativeSource Self}}" />
-        <Button x:Name="SyncNowButton" Grid.Column="1" Classes="tool" Content="立即同步" />
-        <Button x:Name="PairButton" Grid.Column="2" Classes="tool" Content="配对当前目录…" />
+        <Button x:Name="SyncNowButton" Grid.Column="1" Classes="tool" Content="{local:Tr '立即同步'}" />
+        <Button x:Name="PairButton" Grid.Column="2" Classes="tool" Content="{local:Tr '配对当前目录…'}" />
         <TextBlock x:Name="PairStatus" Grid.Row="1" Grid.ColumnSpan="3" Classes="secondary" FontSize="12" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Text, RelativeSource={RelativeSource Self}}" />
       </Grid>
     </Grid>
     <Border Grid.Row="1" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource Divider}" Padding="16,8">
       <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
         <Ellipse Width="8" Height="8" Fill="{DynamicResource Primary}" />
-        <TextBlock x:Name="StatusText" Grid.Column="1" Classes="secondary" FontSize="12" Text="等待连接" TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+        <TextBlock x:Name="StatusText" Grid.Column="1" Classes="secondary" FontSize="12" Text="{local:Tr '等待连接'}" TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Text, RelativeSource={RelativeSource Self}}" />
       </Grid>
     </Border>
   </Grid>

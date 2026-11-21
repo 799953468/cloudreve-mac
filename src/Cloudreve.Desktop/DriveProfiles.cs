@@ -1,0 +1,65 @@
+using Cloudreve.Sync;
+
+namespace Cloudreve.Desktop;
+
+internal sealed class DriveProfiles(SessionFileStore primary)
+{
+    private readonly Dictionary<SessionFileStore, string> reservations = [];
+
+    internal SessionFileStore Primary { get; } = primary;
+
+    internal SessionFileStore Create()
+    {
+        return new SessionFileStore(Path.Combine(Primary.DirectoryPath, "profiles", Guid.NewGuid().ToString("N")));
+    }
+
+    internal IEnumerable<SessionFileStore> OtherStores()
+    {
+        string profiles = Path.Combine(Primary.DirectoryPath, "profiles");
+        if (!Directory.Exists(profiles))
+        {
+            yield break;
+        }
+
+        FolderPairStore.CheckDirectory(profiles);
+        foreach (string path in Directory.EnumerateDirectories(profiles).Order(StringComparer.Ordinal))
+        {
+            if (Guid.TryParseExact(Path.GetFileName(path), "N", out _) && MacFile.Inspect(path) == NodeKind.Directory &&
+                MacFile.Inspect(Path.Combine(path, "drives.json")) == NodeKind.File)
+            {
+                yield return new SessionFileStore(path);
+            }
+        }
+    }
+
+    internal void Reserve(SessionFileStore owner, string local)
+    {
+        string path = MacFile.NormalizeSystemPath(local);
+        lock (reservations)
+        {
+            if (Overlaps(path, Primary.DirectoryPath) || reservations.Any(item => item.Key != owner && Overlaps(item.Value, path)))
+            {
+                throw new IOException(UiText.Get("配对目录不能与其他云盘的配对目录或应用配置目录重叠。"));
+            }
+
+            reservations[owner] = path;
+        }
+    }
+
+    internal void Release(SessionFileStore owner)
+    {
+        lock (reservations)
+        {
+            reservations.Remove(owner);
+        }
+    }
+
+    private static bool Overlaps(string left, string right)
+    {
+        left = Path.TrimEndingDirectorySeparator(left).Normalize();
+        right = Path.TrimEndingDirectorySeparator(right).Normalize();
+        return left.Equals(right, StringComparison.OrdinalIgnoreCase) ||
+               left.StartsWith(right.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase) ||
+               right.StartsWith(left.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase);
+    }
+}

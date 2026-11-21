@@ -3,18 +3,19 @@ using Cloudreve.Sync;
 
 namespace Cloudreve.Desktop;
 
-internal sealed record PairNode(string Key, NodeKind Kind, string? Hash = null, DriveEntry? Remote = null);
+internal sealed record PairNode(string Key, NodeKind Kind, string? Hash = null, DriveEntry? Remote = null, string? LocalId = null);
 
 internal sealed class PairInventory
 {
     internal const string Recovery = ".cloudreve-recovery";
     internal readonly Dictionary<string, PairNode> Nodes = new(StringComparer.OrdinalIgnoreCase);
+    internal readonly HashSet<string> Excluded = new(StringComparer.OrdinalIgnoreCase);
 
-    private static bool Reserved(string name)
+    internal static bool Reserved(string name)
     {
         return name.Equals(".cloudreve-sync-root", StringComparison.OrdinalIgnoreCase) ||
-            name.Equals(Recovery, StringComparison.OrdinalIgnoreCase) || name.Equals(".DS_Store", StringComparison.OrdinalIgnoreCase) ||
-            name.StartsWith(".cloudreve-", StringComparison.OrdinalIgnoreCase) && name.EndsWith(".part", StringComparison.OrdinalIgnoreCase);
+               name.Equals(Recovery, StringComparison.OrdinalIgnoreCase) || name.Equals(".DS_Store", StringComparison.OrdinalIgnoreCase) ||
+               name.StartsWith(".cloudreve-", StringComparison.OrdinalIgnoreCase) && name.EndsWith(".part", StringComparison.OrdinalIgnoreCase);
     }
 
     internal static void ValidateKey(string key)
@@ -23,7 +24,7 @@ internal sealed class PairInventory
         {
             if (string.IsNullOrWhiteSpace(part) || part is "." or ".." || part.IndexOfAny(['\\', '\0']) >= 0 || Reserved(part))
             {
-                throw new InvalidDataException("同步目录包含无法安全映射的文件名。");
+                throw new InvalidDataException(UiText.Get("同步目录包含无法安全映射的文件名。"));
             }
         }
     }
@@ -44,7 +45,7 @@ internal sealed class PairInventory
         FolderPairStore.CheckDirectory(Path.GetDirectoryName(path)!);
         if (MacFile.Inspect(path) != NodeKind.File)
         {
-            throw new IOException("文件在同步期间已变化。");
+            throw new IOException(UiText.Get("文件在同步期间已变化。"));
         }
 
         using (var input = File.OpenRead(path))
@@ -53,7 +54,7 @@ internal sealed class PairInventory
         }
     }
 
-    internal static async Task<PairInventory> ReadLocalAsync(FolderPair pair, CancellationToken cancel)
+    internal static async Task<PairInventory> ReadLocalAsync(FolderPair pair, PairIgnoreRules rules, CancellationToken cancel)
     {
         var inventory = new PairInventory();
         var pending = new Stack<string>();
@@ -71,9 +72,16 @@ internal sealed class PairInventory
 
                 string key = Path.GetRelativePath(pair.Local, path).Normalize();
                 ValidateKey(key);
-                var kind = MacFile.Inspect(path) ?? throw new IOException("扫描期间本地目录已变化。");
+                var kind = MacFile.Inspect(path) ?? throw new IOException(UiText.Get("扫描期间本地目录已变化。"));
+                if (rules.Excludes(key, kind == NodeKind.Directory))
+                {
+                    inventory.Excluded.Add(key);
+                    continue;
+                }
+
                 string? hash = kind == NodeKind.File ? await HashAsync(path, cancel) : null;
-                if (inventory.Add(new PairNode(key, kind, hash)) && kind == NodeKind.Directory)
+                string? localId = kind is NodeKind.File or NodeKind.Directory ? MacFile.Identity(path) : null;
+                if (inventory.Add(new PairNode(key, kind, hash, LocalId: localId)) && kind == NodeKind.Directory)
                 {
                     pending.Push(path);
                 }
@@ -89,15 +97,15 @@ internal sealed class PairInventory
         var b = new Uri(right, UriKind.Absolute);
         // Decode components separately: an encoded slash must not introduce a directory.
         return a.Scheme == "cloudreve" && b.Scheme == a.Scheme && a.Authority == b.Authority && a.UserInfo == b.UserInfo &&
-            a.Fragment.Length == 0 && b.Fragment.Length == 0 && a.Query == b.Query &&
-            a.Segments.Select(Uri.UnescapeDataString).SequenceEqual(b.Segments.Select(Uri.UnescapeDataString));
+               a.Fragment.Length == 0 && b.Fragment.Length == 0 && a.Query == b.Query &&
+               a.Segments.Select(Uri.UnescapeDataString).SequenceEqual(b.Segments.Select(Uri.UnescapeDataString));
     }
 
     internal static void ValidateRemote(string parent, DriveEntry entry)
     {
         if (!SameUri(DriveClient.ChildUri(parent, entry.Name), entry.Uri))
         {
-            throw new InvalidDataException("云端条目不属于正在同步的目录。");
+            throw new InvalidDataException(UiText.Get("云端条目不属于正在同步的目录。"));
         }
     }
 
@@ -106,13 +114,13 @@ internal sealed class PairInventory
         var file = await drive.StatAsync(target, cancel);
         if (file.SkipSync || file.IsFolder || string.IsNullOrEmpty(file.Version) || !SameUri(file.Uri, target))
         {
-            throw new InvalidDataException("无法验证云端文件版本。");
+            throw new InvalidDataException(UiText.Get("无法验证云端文件版本。"));
         }
 
         return file;
     }
 
-    internal static async Task<PairInventory> ReadRemoteAsync(FolderPair pair, DriveClient drive, CancellationToken cancel)
+    internal static async Task<PairInventory> ReadRemoteAsync(FolderPair pair, DriveClient drive, PairIgnoreRules rules, CancellationToken cancel)
     {
         var inventory = new PairInventory();
         var pending = new Stack<(string Key, string Uri)>();
@@ -130,6 +138,12 @@ internal sealed class PairInventory
                 string key = Path.Combine(parent.Key, entry.Name).Normalize();
                 ValidateRemote(parent.Uri, entry);
                 ValidateKey(key);
+                if (rules.Excludes(key, entry.IsFolder))
+                {
+                    inventory.Excluded.Add(key);
+                    continue;
+                }
+
                 var kind = entry.SkipSync ? NodeKind.Unsupported : entry.IsFolder ? NodeKind.Directory : NodeKind.File;
                 var file = kind == NodeKind.File && string.IsNullOrEmpty(entry.Version) ? await ReadVersionAsync(drive, entry.Uri, cancel) : entry;
                 if (inventory.Add(new PairNode(key, kind, Remote: file)) && kind == NodeKind.Directory)
