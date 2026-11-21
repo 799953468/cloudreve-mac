@@ -33,6 +33,8 @@ dotnet publish src/Cloudreve.Desktop -c Release -r "$rid" \
 open "artifacts/$rid/Cloudreve.app"
 ```
 
+On macOS 13 or later, turn on **Settings > General > Launch at startup** in `Cloudreve.app` to open it automatically when you log in. If macOS asks for approval, allow Cloudreve in **System Settings > General > Login Items**. Turn the same switch off to remove the login item.
+
 ## Connect a drive
 
 1. In **Add Drive**, enter the site's root URL (for example, `https://drive.example.com`) and choose **Connect**. Use HTTPS to protect your tokens and files in transit.

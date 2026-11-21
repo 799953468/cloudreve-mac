@@ -4,13 +4,21 @@ namespace Cloudreve.Desktop;
 
 internal enum LoginItemStatus : long
 {
+    Unavailable = -1,
     NotRegistered,
     Enabled,
     RequiresApproval,
     NotFound
 }
 
-internal static partial class MacLoginItem
+internal interface ILoginItemService
+{
+    LoginItemStatus Status();
+    string? SetRegistered(bool registered);
+    void OpenSettings();
+}
+
+internal sealed partial class MacLoginItem : ILoginItemService
 {
     private const string ObjC = "/usr/lib/libobjc.A.dylib";
     private static readonly Lazy<nint> ServiceClass = new(LoadClass);
@@ -32,46 +40,48 @@ internal static partial class MacLoginItem
 
     private static nint LoadClass()
     {
-        string? executable = Environment.ProcessPath;
-        if (!OperatingSystem.IsMacOSVersionAtLeast(13) || executable == null || !executable.EndsWith(".app/Contents/MacOS/CloudreveMac", StringComparison.Ordinal) ||
+        if (!OperatingSystem.IsMacOSVersionAtLeast(13) ||
             !NativeLibrary.TryLoad("/System/Library/Frameworks/ServiceManagement.framework/ServiceManagement", out _))
         {
             return 0;
         }
 
-        return GetClass("SMAppService");
+        // A dotnet or test host is not the application we want macOS to launch.
+        nint bundle = Send(GetClass("NSBundle"), Selector("mainBundle"));
+        nint identifier = Send(bundle, Selector("bundleIdentifier"));
+        return ReadString(identifier) == "io.github.cloudreve-mac.client" ? GetClass("SMAppService") : 0;
     }
 
-    internal static LoginItemStatus Status()
+    private static string? ReadString(nint value)
+    {
+        return Marshal.PtrToStringUTF8(Send(value, Selector("UTF8String")));
+    }
+
+    public LoginItemStatus Status()
     {
         nint service = ServiceClass.Value == 0 ? 0 : Send(ServiceClass.Value, Selector("mainAppService"));
         if (service == 0)
         {
-            return LoginItemStatus.NotFound;
+            return LoginItemStatus.Unavailable;
         }
 
         return (LoginItemStatus)(long)Send(service, Selector("status"));
     }
 
-    internal static void Toggle()
+    public string? SetRegistered(bool registered)
     {
-        var status = Status();
-        if (status == LoginItemStatus.RequiresApproval)
-        {
-            SendVoid(ServiceClass.Value, Selector("openSystemSettingsLoginItems"));
-            return;
-        }
-
-        if (status is not (LoginItemStatus.Enabled or LoginItemStatus.NotRegistered))
-        {
-            throw new IOException(UiText.Get("请在 macOS 13 或更高版本从已安装的 Cloudreve.app 管理登录项。"));
-        }
-
         nint service = Send(ServiceClass.Value, Selector("mainAppService"));
-        string action = status == LoginItemStatus.Enabled ? "unregisterAndReturnError:" : "registerAndReturnError:";
-        if (SetRegistration(service, Selector(action), out _) == 0 && Status() != LoginItemStatus.RequiresApproval)
+        string action = registered ? "registerAndReturnError:" : "unregisterAndReturnError:";
+        if (SetRegistration(service, Selector(action), out nint error) != 0)
         {
-            throw new IOException(UiText.Get("macOS 未更改登录项，请在系统设置的登录项中检查。"));
+            return null;
         }
+
+        return ReadString(Send(error, Selector("localizedDescription")));
+    }
+
+    public void OpenSettings()
+    {
+        SendVoid(ServiceClass.Value, Selector("openSystemSettingsLoginItems"));
     }
 }

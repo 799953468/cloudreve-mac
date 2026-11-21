@@ -359,6 +359,106 @@ public sealed class WindowTests : IDisposable
         }, TestContext.Current.CancellationToken);
     }
 
+    [Fact]
+    public async Task StartupSwitchTracksTheSystemLoginItem()
+    {
+        await using var ui = HeadlessUnitTestSession.StartNew(typeof(TestApplication));
+        await ui.Dispatch(async () =>
+        {
+            var service = new LoginItemStub { Current = LoginItemStatus.NotFound };
+            var host = new WorkspaceHost(new DriveProfiles(sessions), transport: transport);
+            var settings = new SettingsWindow(host, service);
+            settings.Show();
+            try
+            {
+                settings.Navigation.SelectedIndex = 1;
+                var toggle = settings.GeneralPage.GetVisualDescendants().OfType<ToggleSwitch>().First();
+                Assert.True(toggle.IsEnabled);
+                Assert.False(toggle.IsChecked);
+                Assert.Empty(service.Writes);
+
+                toggle.IsChecked = true;
+                Assert.True(toggle.IsChecked);
+                Assert.Equal(LoginItemStatus.Enabled, service.Current);
+                toggle.IsChecked = false;
+                Assert.False(toggle.IsChecked);
+                Assert.Equal(LoginItemStatus.NotRegistered, service.Current);
+                Assert.Equal([true, false], service.Writes);
+
+                service.OnRegister = LoginItemStatus.RequiresApproval;
+                toggle.IsChecked = true;
+                Assert.False(toggle.IsChecked);
+                Assert.Equal(1, service.SettingsOpened);
+                Assert.Contains(DesktopText.Get("settings.autoStartApproval"), Labels(settings.GeneralPage));
+                toggle.IsChecked = true;
+                Assert.Equal(2, service.SettingsOpened);
+                Assert.Equal([true, false, true], service.Writes);
+
+                settings.Hide();
+                service.Current = LoginItemStatus.Enabled;
+                settings.Show();
+                settings.Activate();
+                Assert.True(toggle.IsChecked);
+                Assert.Equal([true, false, true], service.Writes);
+
+                service.Error = "Login item change denied";
+                toggle.IsChecked = false;
+                Assert.True(toggle.IsChecked);
+                Assert.Contains(service.Error, Labels(settings.GeneralPage));
+                Assert.Equal([true, false, true, false], service.Writes);
+
+                service.Error = null;
+                service.Current = LoginItemStatus.RequiresApproval;
+                toggle.IsChecked = false;
+                Assert.Equal(LoginItemStatus.NotRegistered, service.Current);
+                Assert.False(toggle.IsChecked);
+                Assert.Equal(2, service.SettingsOpened);
+
+                service.Current = LoginItemStatus.Unavailable;
+                settings.Navigation.SelectedIndex = 0;
+                settings.Navigation.SelectedIndex = 1;
+                var unavailable = settings.GeneralPage.GetVisualDescendants().OfType<ToggleSwitch>().First();
+                Assert.False(unavailable.IsEnabled);
+                Assert.False(unavailable.IsChecked);
+            }
+            finally
+            {
+                settings.Close();
+                await host.StopAsync();
+            }
+        }, TestContext.Current.CancellationToken);
+    }
+
+    private sealed class LoginItemStub : ILoginItemService
+    {
+        internal LoginItemStatus Current { get; set; }
+        internal LoginItemStatus OnRegister { get; set; } = LoginItemStatus.Enabled;
+        internal string? Error { get; set; }
+        internal List<bool> Writes { get; } = [];
+        internal int SettingsOpened { get; private set; }
+
+        public LoginItemStatus Status()
+        {
+            return Current;
+        }
+
+        public string? SetRegistered(bool registered)
+        {
+            Writes.Add(registered);
+            if (Error == null)
+            {
+                Current = registered ? OnRegister : LoginItemStatus.NotRegistered;
+            }
+
+            return Error;
+        }
+
+        public void OpenSettings()
+        {
+            SettingsOpened++;
+        }
+    }
+
     private static void Capture(TopLevel window, string name)
     {
         if (Environment.GetEnvironmentVariable("CLOUDREVE_UI_CAPTURES") is not { Length: > 0 } dir)

@@ -46,6 +46,7 @@
   <Target Name="PrepareMacDebugBundle" AfterTargets="Build" Condition="'$(DebugBundleRoot)' != ''">
     <Copy SourceFiles="Info.plist" DestinationFolder="$(DebugBundleRoot)/Contents" SkipUnchangedFiles="true" />
     <Copy SourceFiles="Assets/Cloudreve.icns" DestinationFolder="$(DebugBundleRoot)/Contents/Resources" SkipUnchangedFiles="true" />
+    <Exec Command="/usr/bin/codesign --force --deep --sign - &quot;$(DebugBundleRoot)&quot;" />
     <Exec Command="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f &quot;$(DebugBundleRoot)&quot;" />
   </Target>
   <PropertyGroup Condition="'$(MacBundle)' == 'true'">

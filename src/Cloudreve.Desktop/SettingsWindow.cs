@@ -10,13 +10,16 @@ namespace Cloudreve.Desktop;
 internal sealed partial class SettingsWindow : Window
 {
     private readonly WorkspaceHost host;
+    private readonly ILoginItemService loginItem;
+    private Action? refreshLoginItem;
     private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private (MountedDrive Drive, bool Expired, bool Lost, (long Used, long Total)? Space, FolderPair? Pair, string Name)[] shown = [];
     private bool rendered;
 
-    internal SettingsWindow(WorkspaceHost host)
+    internal SettingsWindow(WorkspaceHost host, ILoginItemService? loginItem = null)
     {
         this.host = host;
+        this.loginItem = loginItem ?? new MacLoginItem();
         InitializeComponent();
         AddButton.Content = "+  " + DesktopText.Get("popup.newDrive");
         AddButton.Click += (_, _) => { host.OpenAdd(); };
@@ -44,6 +47,13 @@ internal sealed partial class SettingsWindow : Window
         }
 
         host.Changed += RefreshDrives;
+        Activated += (_, _) =>
+        {
+            if (GeneralPage.IsVisible)
+            {
+                refreshLoginItem?.Invoke();
+            }
+        };
         timer.Tick += (_, _) =>
         {
             if (DrivePage.IsVisible)
@@ -255,8 +265,7 @@ internal sealed partial class SettingsWindow : Window
         var prefs = Program.Preferences;
         GeneralPage.Children.Clear();
         var launch = Group("launchSettings");
-        var startup = MacLoginItem.Status();
-        Toggle(launch, "autoStart", startup == LoginItemStatus.Enabled, _ => MacLoginItem.Toggle()).IsEnabled = startup != LoginItemStatus.NotFound;
+        AddLoginItemSetting(launch);
         Toggle(launch, "fastPopupLaunch", prefs.Current.FastPopup, value => prefs.Save(prefs.Current with { FastPopup = value }));
         var languages = new[] { UiLanguage.SystemDefault, UiLanguage.Chinese, UiLanguage.English };
         Select(Group("languageSettings"), "language", [DesktopText.Get("settings.languageAuto"), "简体中文", "English"], Array.IndexOf(languages, prefs.Current.Language),
@@ -286,12 +295,13 @@ internal sealed partial class SettingsWindow : Window
         return group;
     }
 
-    private static void SettingRow(StackPanel group, string key, Control input, string? detail = null)
+    private static TextBlock SettingRow(StackPanel group, string key, Control input, string? detail = null)
     {
         var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 12, Margin = new Thickness(16, 10) };
         var text = new StackPanel();
         text.Children.Add(new TextBlock { Text = DesktopText.Get("settings." + key) });
-        text.Children.Add(new TextBlock { Classes = { "secondary" }, Text = detail ?? DesktopText.Get("settings." + key + "Description"), FontSize = 12, TextWrapping = TextWrapping.Wrap });
+        var description = new TextBlock { Classes = { "secondary" }, Text = detail ?? DesktopText.Get("settings." + key + "Description"), FontSize = 12, TextWrapping = TextWrapping.Wrap };
+        text.Children.Add(description);
         input.VerticalAlignment = VerticalAlignment.Center;
         Grid.SetColumn(input, 1);
         row.Children.Add(text);
@@ -302,6 +312,76 @@ internal sealed partial class SettingsWindow : Window
         }
 
         group.Children.Add(row);
+        return description;
+    }
+
+    private void AddLoginItemSetting(StackPanel group)
+    {
+        var toggle = new ToggleSwitch { OnContent = "", OffContent = "", MinWidth = 0 };
+        var description = SettingRow(group, "autoStart", toggle);
+        bool refreshing = false;
+
+        void Refresh()
+        {
+            var status = loginItem.Status();
+            refreshing = true;
+            toggle.IsChecked = status == LoginItemStatus.Enabled;
+            refreshing = false;
+            toggle.IsEnabled = status != LoginItemStatus.Unavailable;
+            description.Text = status switch
+            {
+                LoginItemStatus.Unavailable => UiText.Get("请在 macOS 13 或更高版本从已安装的 Cloudreve.app 管理登录项。"),
+                LoginItemStatus.RequiresApproval => DesktopText.Get("settings.autoStartApproval"),
+                _ => DesktopText.Get("settings.autoStartDescription")
+            };
+        }
+
+        refreshLoginItem = Refresh;
+        Refresh();
+        toggle.IsCheckedChanged += (_, _) =>
+        {
+            if (refreshing)
+            {
+                return;
+            }
+
+            string? error = ChangeLoginItem(toggle.IsChecked == true);
+            Refresh();
+            if (error != null)
+            {
+                description.Text = error;
+            }
+        };
+    }
+
+    private string? ChangeLoginItem(bool enabled)
+    {
+        var status = loginItem.Status();
+        var target = enabled ? LoginItemStatus.Enabled : LoginItemStatus.NotRegistered;
+        if (status == LoginItemStatus.Unavailable || status == target || (!enabled && status == LoginItemStatus.NotFound))
+        {
+            return null;
+        }
+
+        string? error = null;
+        if (!enabled || status != LoginItemStatus.RequiresApproval)
+        {
+            error = loginItem.SetRegistered(enabled);
+            status = loginItem.Status();
+        }
+
+        if (enabled && status == LoginItemStatus.RequiresApproval)
+        {
+            loginItem.OpenSettings();
+            return null;
+        }
+
+        if (status == target || (!enabled && status == LoginItemStatus.NotFound))
+        {
+            return null;
+        }
+
+        return error ?? UiText.Get("macOS 未更改登录项，请在系统设置的登录项中检查。");
     }
 
     private ToggleSwitch Toggle(StackPanel group, string key, bool value, Action<bool> save)
