@@ -1,0 +1,87 @@
+name: Release build
+
+on:
+  push:
+    tags: ['v[0-9]*']
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  build:
+    name: Package macOS apps
+    needs: test
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
+        with:
+          global-json-file: global.json
+      - name: Build and archive both architectures
+        shell: bash
+        run: |
+          project=src/Cloudreve.Desktop
+          version_args=()
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            version=${GITHUB_REF_NAME#v}
+            if [[ ! $version =~ ^([0-9]+\.[0-9]+\.[0-9]+)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+              echo 'Expected a version tag such as v1.2.3 or v1.2.3-rc.1' >&2
+              exit 1
+            fi
+            plutil -replace CFBundleShortVersionString -string "${BASH_REMATCH[1]}" "$project/Info.plist"
+            plutil -replace CFBundleVersion -string "$GITHUB_RUN_NUMBER" "$project/Info.plist"
+            version_args+=("-p:Version=$version")
+          fi
+
+          mkdir -p artifacts/release
+          package() {
+            local rid=$1 arch=$2
+            local bundle="artifacts/$rid/Cloudreve.app"
+            dotnet publish "$project" -c Release -r "$rid" --self-contained true -p:MacBundle=true "${version_args[@]}"
+            lipo "$bundle/Contents/MacOS/CloudreveMac" -verify_arch "$arch"
+            lipo "$bundle/Contents/MacOS/libCloudreveTray.dylib" -verify_arch "$arch"
+            ditto -c -k --sequesterRsrc --keepParent "$bundle" "artifacts/release/Cloudreve-$rid.zip"
+          }
+          package osx-arm64 arm64
+          package osx-x64 x86_64
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: Cloudreve-macOS
+          path: artifacts/release/*.zip
+          if-no-files-found: error
+          compression-level: 0
+
+  attach:
+    name: Attach packages to the release
+    needs: build
+    if: github.event_name == 'release' && !github.event.release.immutable
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: Cloudreve-macOS
+          path: dist
+      - name: Upload missing release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' > "$RUNNER_TEMP/existing-assets"
+          for file in dist/Cloudreve-osx-{arm64,x64}.zip; do
+            if ! grep -Fxq "${file##*/}" "$RUNNER_TEMP/existing-assets"; then
+              gh release upload "$RELEASE_TAG" "$file" --repo "$GITHUB_REPOSITORY"
+            fi
+          done
