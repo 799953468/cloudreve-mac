@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Platform;
 using Avalonia.Themes.Fluent;
+using Avalonia.Threading;
 using Serilog;
 using Serilog.Events;
 
@@ -102,6 +103,24 @@ internal sealed class DesktopApp : Application
             }
 
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            bool stopping = false;
+            bool readyToQuit = false;
+            desktop.ShutdownRequested += async (_, e) =>
+            {
+                if (readyToQuit)
+                {
+                    return;
+                }
+
+                e.Cancel = true;
+                if (!stopping)
+                {
+                    stopping = true;
+                    await window.PrepareToQuitAsync();
+                    readyToQuit = true;
+                    Dispatcher.UIThread.Post(() => { desktop.TryShutdown(); });
+                }
+            };
             window.Closing += (_, e) =>
             {
                 if (e.CloseReason == WindowCloseReason.WindowClosing)

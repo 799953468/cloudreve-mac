@@ -5,18 +5,20 @@ using Cloudreve.Sync;
 
 namespace Cloudreve.Desktop;
 
-internal sealed record FolderPair(string Local, string Remote, Guid Marker);
+internal sealed record FolderPair(string Local, string Remote, Guid Marker, string RemoteId);
 
 internal sealed class FolderPairStore
 {
     private const string MarkerName = ".cloudreve-sync-root";
     private readonly string directory;
+    private readonly string settings;
 
     internal FolderPairStore(string settingsRoot, DriveSession session)
     {
         string identity = JsonSerializer.Serialize(new[] { session.Site, session.UserId, session.DriveId, session.Root });
         string key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
-        directory = Path.Combine(settingsRoot, key);
+        settings = MacFile.NormalizeSystemPath(settingsRoot);
+        directory = Path.Combine(settings, key);
     }
 
     internal FolderPair? Load()
@@ -30,11 +32,11 @@ internal sealed class FolderPairStore
         return JsonSerializer.Deserialize<FolderPair>(File.ReadAllText(path)) ?? throw new InvalidDataException("同步配对记录无效。");
     }
 
-    internal FolderPair Create(string localDirectory, string remote)
+    internal FolderPair Create(string localDirectory, string remote, string remoteId)
     {
-        string local = Path.TrimEndingDirectorySeparator(Path.GetFullPath(localDirectory));
+        string local = MacFile.NormalizeSystemPath(localDirectory);
         CheckDirectory(local);
-        if (IsWithin(directory, local) || IsWithin(local, directory))
+        if (IsWithin(settings, local) || IsWithin(local, settings))
         {
             throw new IOException("同步目录不能包含应用的设置目录。");
         }
@@ -44,7 +46,8 @@ internal sealed class FolderPairStore
             throw new IOException("请先停止原目录配对。");
         }
 
-        var pair = new FolderPair(local, remote, Guid.NewGuid());
+        ArgumentException.ThrowIfNullOrWhiteSpace(remoteId);
+        var pair = new FolderPair(local, remote, Guid.NewGuid(), remoteId);
         string marker = Path.Combine(local, MarkerName);
         using (var file = new FileStream(marker, FileMode.CreateNew, FileAccess.Write, FileShare.None))
         using (var writer = new StreamWriter(file))
@@ -54,7 +57,7 @@ internal sealed class FolderPairStore
 
         try
         {
-            WriteJson(Path.Combine(directory, "pair.json"), pair);
+            WriteJson(Path.Combine(directory, "pair.json"), pair, false);
             return pair;
         }
         catch
@@ -67,11 +70,20 @@ internal sealed class FolderPairStore
 
     internal void Disconnect(FolderPair pair)
     {
-        File.Delete(Path.Combine(directory, "pair.json"));
-        if (Directory.Exists(pair.Local) && MacFile.Inspect(Path.Combine(pair.Local, MarkerName)) == NodeKind.File)
+        using (Lock(pair))
         {
-            Verify(pair);
-            File.Delete(Path.Combine(pair.Local, MarkerName));
+            if (Directory.Exists(pair.Local))
+            {
+                CheckDirectory(pair.Local);
+                string marker = Path.Combine(pair.Local, MarkerName);
+                if (MacFile.Inspect(marker) == NodeKind.File && new FileInfo(marker).Length <= 128 && File.ReadAllText(marker) == pair.Marker.ToString("N"))
+                {
+                    File.Delete(marker);
+                }
+            }
+
+            File.Delete(Path.Combine(directory, "pair.json"));
+            File.Delete(BaselinePath(pair));
         }
     }
 
@@ -103,7 +115,21 @@ internal sealed class FolderPairStore
 
     internal FileStream Lock(FolderPair pair)
     {
-        return new FileStream(BaselinePath(pair) + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        var lease = new FileStream(BaselinePath(pair) + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        try
+        {
+            if (Load() != pair)
+            {
+                throw new IOException("同步配对已更改。");
+            }
+
+            return lease;
+        }
+        catch
+        {
+            lease.Dispose();
+            throw;
+        }
     }
 
     private string BaselinePath(FolderPair pair)
@@ -129,7 +155,7 @@ internal sealed class FolderPairStore
         return path.Equals(root, StringComparison.OrdinalIgnoreCase) || path.StartsWith(root.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void WriteJson<T>(string path, T value)
+    private static void WriteJson<T>(string path, T value, bool overwrite = true)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         string temp = path + "." + Guid.NewGuid().ToString("N");
@@ -141,7 +167,7 @@ internal sealed class FolderPairStore
                 output.Flush(true);
             }
 
-            File.Move(temp, path, true);
+            File.Move(temp, path, overwrite);
         }
         finally
         {

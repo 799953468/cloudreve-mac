@@ -26,9 +26,10 @@ internal sealed partial class WorkspaceWindow : Window
     {
     }
 
-    internal WorkspaceWindow(Func<DriveSession?> restore, HttpMessageHandler? siteTransport = null)
+    internal WorkspaceWindow(Func<DriveSession?> restore, HttpMessageHandler? siteTransport = null, string? pairSettings = null)
     {
         api = new HttpClient(siteTransport ?? new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+        settingsRoot = pairSettings ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Application Support", "Cloudreve", "folder-pairs");
         InitializeComponent();
         Opened += async (_, _) =>
         {
@@ -59,6 +60,9 @@ internal sealed partial class WorkspaceWindow : Window
         RefreshButton.Click += async (_, _) => { await RefreshAsync(); };
         OpenFolderButton.Click += async (_, _) => { await RunAsync("Open directory", OpenSelectedAsync); };
         DownloadButton.Click += async (_, _) => { await RunAsync("Download file", DownloadSelectedAsync); };
+        UploadButton.Click += async (_, _) => { await RunAsync("Upload file", UploadSelectedAsync); };
+        PairButton.Click += async (_, _) => { await RunAsync("Configure folder pair", ConfigurePairAsync); };
+        SyncNowButton.Click += (_, _) => { RequestSync(); };
         BackButton.Click += async (_, _) =>
         {
             await RunAsync("Return to directory", async () =>
@@ -72,8 +76,9 @@ internal sealed partial class WorkspaceWindow : Window
         };
         DisconnectButton.Click += async (_, _) =>
         {
-            await RunAsync("Disconnect drive", () =>
+            await RunAsync("Disconnect drive", async () =>
             {
+                await UnpairAsync();
                 SessionVault.Forget();
                 StopWatching();
                 pending = null;
@@ -85,7 +90,6 @@ internal sealed partial class WorkspaceWindow : Window
                 DriveName.Text = null;
                 LocationText.Text = null;
                 StatusText.Text = "已移除本机授权";
-                return Task.CompletedTask;
             });
         };
         UpdateControls();
@@ -116,6 +120,7 @@ internal sealed partial class WorkspaceWindow : Window
             var verifying = new DriveClient(api, storage, candidate, updated => { candidate = updated; });
             string serverUser = await verifying.UserIdAsync(shutdown.Token);
             candidate = DesktopLogin.VerifyBinding(candidate, serverUser, account);
+            await StopPairLoopAsync();
             SessionVault.Save(candidate);
             Bind(candidate);
             await LoadAsync(directory);
@@ -141,6 +146,7 @@ internal sealed partial class WorkspaceWindow : Window
         LocationText.Text = directory;
         history.Clear();
         Files.ItemsSource = null;
+        RestorePair(saved);
         UpdateControls();
     }
 
@@ -303,6 +309,11 @@ internal sealed partial class WorkspaceWindow : Window
         BackButton.IsEnabled = ready && history.Count > 0;
         OpenFolderButton.IsEnabled = ready && Files.SelectedItem is DriveEntry { IsFolder: true };
         DownloadButton.IsEnabled = ready && Files.SelectedItem is DriveEntry { IsFolder: false };
+        UploadButton.IsEnabled = ready && Files.ItemsSource != null;
+        PairButton.IsEnabled = ready && (pair != null || pairStore != null && Files.ItemsSource != null);
+        PairButton.Content = pair == null ? "配对当前目录…" : "停止配对";
+        SyncNowButton.IsVisible = pair != null;
+        SyncNowButton.IsEnabled = ready && pairLifetime != null;
         StatusChanged?.Invoke(StatusText.Text ?? "Cloudreve", ready);
     }
 

@@ -15,27 +15,9 @@ public sealed class SyncEngine
 
     public SyncEngine(string localDirectory, string remoteDirectory, string stateFile)
     {
-        local = NormalizeSystemPath(localDirectory);
-        remote = NormalizeSystemPath(remoteDirectory);
-        state = NormalizeSystemPath(stateFile);
-    }
-
-    private static string NormalizeSystemPath(string path)
-    {
-        string full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
-        foreach (string alias in new[] { "/var", "/tmp", "/etc" })
-        {
-            if (full == alias || full.StartsWith(alias + "/", StringComparison.Ordinal))
-            {
-                string expected = "/private" + alias;
-                if (Directory.ResolveLinkTarget(alias, true)?.FullName == expected)
-                {
-                    return expected + full[alias.Length..];
-                }
-            }
-        }
-
-        return full;
+        local = MacFile.NormalizeSystemPath(localDirectory);
+        remote = MacFile.NormalizeSystemPath(remoteDirectory);
+        state = MacFile.NormalizeSystemPath(stateFile);
     }
 
     public SyncResult Run()

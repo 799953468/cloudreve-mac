@@ -115,6 +115,9 @@ public sealed class WindowTests
             Assert.Equal("刷新目录", AutomationProperties.GetName(window.RefreshButton));
             Assert.False(window.RefreshButton.IsEnabled);
             Assert.False(window.DownloadButton.IsEnabled);
+            Assert.False(window.UploadButton.IsEnabled);
+            Assert.False(window.PairButton.IsEnabled);
+            Assert.False(window.SyncNowButton.IsVisible);
             Assert.Equal(Color.Parse("#1976D2"), Assert.IsAssignableFrom<ISolidColorBrush>(window.ConnectButton.Background).Color);
         }
         finally
@@ -139,6 +142,55 @@ public sealed class WindowTests
         }
     }
 
+    [Fact]
+    public async Task RestoredPairScansWhileHiddenAndQuitsCleanly()
+    {
+        var temp = Directory.CreateTempSubdirectory("cloudreve-window-");
+        try
+        {
+            string settings = Path.Combine(temp.FullName, "settings");
+            var session = new DriveSession("https://site.example/", "drive", "Work", "cloudreve://my/", "user", "access", "refresh",
+                DateTimeOffset.UtcNow.AddMinutes(10), DateTimeOffset.UtcNow.AddHours(1));
+            var store = new FolderPairStore(settings, session);
+            var pair = store.Create(temp.CreateSubdirectory("local").FullName, session.Root, "root-id");
+            var transport = new DirectoryHandler { Empty = true };
+            await using (var ui = HeadlessUnitTestSession.StartNew(typeof(TestApplication)))
+            {
+                var cancel = TestContext.Current.CancellationToken;
+                await ui.Dispatch(async () =>
+                {
+                    var window = new WorkspaceWindow(() => session, transport, settings);
+                    try
+                    {
+                        window.Show();
+                        await window.RefreshAsync();
+                        Assert.Contains(pair.Remote, window.PairLocation.Text);
+                        Assert.True(window.SyncNowButton.IsVisible);
+                        window.Hide();
+                        await transport.RootChecked.Task.WaitAsync(TimeSpan.FromSeconds(5), cancel);
+                        await window.PrepareToQuitAsync();
+                        Assert.Equal(pair, store.Load());
+                        using (store.Lock(pair))
+                        {
+                            FolderPairStore.Verify(pair);
+                        }
+                    }
+                    finally
+                    {
+                        window.Close();
+                        window.Stop();
+                    }
+
+                    return true;
+                }, cancel);
+            }
+        }
+        finally
+        {
+            temp.Delete(true);
+        }
+    }
+
     private static async Task CheckRestoredDriveAsync(bool dark)
     {
         var session = new DriveSession("https://site.example/", "drive", "工作云盘", "cloudreve://my/", "user", "access", "refresh",
@@ -156,6 +208,8 @@ public sealed class WindowTests
             Assert.True(window.Workspace.IsVisible);
             Assert.Equal(session.Name, window.DriveName.Text);
             Assert.Equal(session.Root, window.LocationText.Text);
+            Assert.True(window.PairButton.IsEnabled);
+            Assert.True(window.UploadButton.IsEnabled);
             Assert.Equal(Color.Parse(dark ? "#121212" : "#FFFFFF"), Assert.IsAssignableFrom<ISolidColorBrush>(window.Background).Color);
             Assert.False(window.EmptyFolder.IsVisible);
             Assert.Equal(2, window.Files.ItemCount);
@@ -190,12 +244,22 @@ public sealed class WindowTests
     private sealed class DirectoryHandler : HttpMessageHandler
     {
         internal bool Empty { get; set; }
+        internal TaskCompletionSource RootChecked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             if (request.RequestUri!.AbsolutePath == "/api/v4/file/events")
             {
                 await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+
+            if (request.RequestUri.AbsolutePath == "/api/v4/file/info")
+            {
+                RootChecked.TrySetResult();
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new { code = 0, data = new { type = 1, id = "root-id", path = "cloudreve://my" } })
+                };
             }
 
             Assert.Equal("/api/v4/file", request.RequestUri.AbsolutePath);

@@ -37,7 +37,7 @@
         <Button x:Name="CancelLogin" Classes="tool" Content="返回" Margin="0,8,0,0" HorizontalAlignment="Stretch" IsVisible="False" />
       </StackPanel>
     </ScrollViewer>
-    <Grid x:Name="Workspace" Grid.Row="0" RowDefinitions="Auto,Auto,*,Auto" IsVisible="False">
+    <Grid x:Name="Workspace" Grid.Row="0" RowDefinitions="Auto,Auto,*,Auto,Auto" IsVisible="False">
       <Border Background="{DynamicResource HeaderFill}" BorderBrush="{DynamicResource Divider}" BorderThickness="0,0,0,1" Padding="16,12,16,8">
         <Grid RowDefinitions="Auto,Auto" RowSpacing="12">
           <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
@@ -58,7 +58,7 @@
           </Grid>
         </Grid>
       </Border>
-      <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,*,Auto,Auto" ColumnSpacing="4" Margin="16,8">
+      <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto" ColumnSpacing="4" Margin="16,8">
         <Button x:Name="BackButton" Classes="tool icon" ToolTip.Tip="上一级" AutomationProperties.Name="上一级" Width="32" Height="32" HorizontalContentAlignment="Center">
           <PathIcon Width="16" Height="16" Data="M20,12 L12,4 L4,12 L5.5,13.5 L11,8 V21 H13 V8 L18.5,13.5 Z" />
         </Button>
@@ -67,6 +67,7 @@
         </Button>
         <Button x:Name="OpenFolderButton" Grid.Column="3" Classes="tool" Content="打开目录" />
         <Button x:Name="DownloadButton" Grid.Column="4" Classes="tool" Content="下载…" />
+        <Button x:Name="UploadButton" Grid.Column="5" Classes="tool" Content="上传…" />
       </Grid>
       <Grid Grid.Row="2">
         <ListBox x:Name="Files" Background="Transparent" BorderThickness="0" AutomationProperties.Name="云端文件">
@@ -87,6 +88,12 @@
         </StackPanel>
       </Grid>
       <TextBlock x:Name="Changes" Grid.Row="3" Margin="16,4" FontSize="12" Classes="secondary" TextWrapping="Wrap" IsVisible="{Binding Text.Length, RelativeSource={RelativeSource Self}, FallbackValue=False}" />
+      <Grid Grid.Row="4" Margin="16,4,16,8" RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
+        <TextBlock x:Name="PairLocation" Classes="secondary" VerticalAlignment="Center" FontSize="12" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+        <Button x:Name="SyncNowButton" Grid.Column="1" Classes="tool" Content="立即同步" />
+        <Button x:Name="PairButton" Grid.Column="2" Classes="tool" Content="配对当前目录…" />
+        <TextBlock x:Name="PairStatus" Grid.Row="1" Grid.ColumnSpan="3" Classes="secondary" FontSize="12" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+      </Grid>
     </Grid>
     <Border Grid.Row="1" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource Divider}" Padding="16,8">
       <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">

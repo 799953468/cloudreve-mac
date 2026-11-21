@@ -6,6 +6,24 @@ internal enum NodeKind { File, Directory, Unsupported }
 
 internal static partial class MacFile
 {
+    internal static string NormalizeSystemPath(string path)
+    {
+        string full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        foreach (string alias in new[] { "/var", "/tmp", "/etc" })
+        {
+            if (full == alias || full.StartsWith(alias + "/", StringComparison.Ordinal))
+            {
+                string expected = "/private" + alias;
+                if (Directory.ResolveLinkTarget(alias, true)?.FullName == expected)
+                {
+                    return expected + full[alias.Length..];
+                }
+            }
+        }
+
+        return full;
+    }
+
     // Darwin's getattrlist returns the vnode type without opening a FIFO or following a link.
     [StructLayout(LayoutKind.Sequential)]
     private struct AttributeList
