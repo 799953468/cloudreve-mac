@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/Cloudreve.Desktop/Cloudreve.Desktop.csproj" />
+  <Project Path="src/Cloudreve.Sync/Cloudreve.Sync.csproj" />
+  <Project Path="tests/Cloudreve.Sync.Tests/Cloudreve.Sync.Tests.csproj" />
+</Solution>

@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>CloudreveMac</AssemblyName>
+    <RootNamespace>Cloudreve.Desktop</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Features>runtime-async=on</Features>
+  </PropertyGroup>
+  <ItemGroup>
+    <AvaloniaResource Include="Assets/cloudreve.png" />
+    <AvaloniaResource Include="Assets/Fonts/Roboto.ttf" />
+    <None Update="Assets/Fonts/OFL.txt" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Assets/Cloudreve-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
+    <InternalsVisibleTo Include="Cloudreve.Sync.Tests" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.6" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.6" />
+    <PackageReference Include="Serilog" Version="4.4.0" />
+    <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="WorkspaceSettings.cs" />
+  </ItemGroup>
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('OSX')) and '$(Configuration)' == 'Debug' and '$(RuntimeIdentifier)' == '' and '$(MacBundle)' != 'true'">
+    <DebugBundleRoot>$(MSBuildProjectDirectory)/bin/Debug/$(TargetFramework)/Cloudreve.app</DebugBundleRoot>
+    <OutputPath>$(DebugBundleRoot)/Contents/MacOS/</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <UseAppHost>true</UseAppHost>
+  </PropertyGroup>
+  <Target Name="PrepareMacDebugBundle" AfterTargets="Build" Condition="'$(DebugBundleRoot)' != ''">
+    <Copy SourceFiles="Info.plist" DestinationFolder="$(DebugBundleRoot)/Contents" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="Assets/Cloudreve.icns" DestinationFolder="$(DebugBundleRoot)/Contents/Resources" SkipUnchangedFiles="true" />
+    <Exec Command="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f &quot;$(DebugBundleRoot)&quot;" />
+  </Target>
+  <PropertyGroup Condition="'$(MacBundle)' == 'true'">
+    <BundleRoot>$(MSBuildThisFileDirectory)../../artifacts/$(RuntimeIdentifier)/Cloudreve.app</BundleRoot>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+  <Target Name="AssembleMacBundle" AfterTargets="Publish" Condition="'$(MacBundle)' == 'true'">
+    <Error Condition="'$(RuntimeIdentifier)' != 'osx-arm64' and '$(RuntimeIdentifier)' != 'osx-x64'" Text="Specify -r osx-arm64 or -r osx-x64." />
+    <!-- Recreate the bundle so obsolete components from previous builds are never signed or shipped. -->
+    <RemoveDir Directories="$(BundleRoot)/Contents" />
+    <Copy SourceFiles="@(ResolvedFileToPublish->'$(PublishDir)%(RelativePath)')" DestinationFiles="@(ResolvedFileToPublish->'$(BundleRoot)/Contents/MacOS/%(RelativePath)')" />
+    <Copy SourceFiles="Info.plist" DestinationFolder="$(BundleRoot)/Contents" />
+    <Copy SourceFiles="Assets/Cloudreve.icns" DestinationFolder="$(BundleRoot)/Contents/Resources" />
+    <Exec Command="/usr/bin/codesign --force --deep --sign - &quot;$(BundleRoot)&quot;" />
+    <Exec Command="/usr/bin/codesign --verify --deep --strict &quot;$(BundleRoot)&quot;" />
+  </Target>
+</Project>

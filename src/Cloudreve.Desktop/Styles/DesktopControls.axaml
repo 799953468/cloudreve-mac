@@ -1,0 +1,132 @@
+<Styles xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!-- Mirrors ui/src/theme.ts and the Material action palette in cloudreve/desktop. -->
+  <Styles.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="BrandInk">Black</SolidColorBrush>
+          <SolidColorBrush x:Key="Paper">#FFFFFF</SolidColorBrush>
+          <SolidColorBrush x:Key="HeaderFill">#F5F5F5</SolidColorBrush>
+          <SolidColorBrush x:Key="Ink">#DE000000</SolidColorBrush>
+          <SolidColorBrush x:Key="Muted">#99000000</SolidColorBrush>
+          <SolidColorBrush x:Key="Divider">#1F000000</SolidColorBrush>
+          <SolidColorBrush x:Key="Primary">#1976D2</SolidColorBrush>
+          <SolidColorBrush x:Key="PrimaryHover">#1565C0</SolidColorBrush>
+          <SolidColorBrush x:Key="OnPrimary">White</SolidColorBrush>
+          <SolidColorBrush x:Key="HoverFill">#0A000000</SolidColorBrush>
+          <SolidColorBrush x:Key="SelectedFill">#14000000</SolidColorBrush>
+          <SolidColorBrush x:Key="PressedFill">#1F000000</SolidColorBrush>
+          <SolidColorBrush x:Key="FieldFill">#0F000000</SolidColorBrush>
+          <SolidColorBrush x:Key="FieldHover">#17000000</SolidColorBrush>
+          <SolidColorBrush x:Key="DisabledInk">#61000000</SolidColorBrush>
+          <SolidColorBrush x:Key="DisabledFill">#1F000000</SolidColorBrush>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="BrandInk">White</SolidColorBrush>
+          <SolidColorBrush x:Key="Paper">#121212</SolidColorBrush>
+          <SolidColorBrush x:Key="HeaderFill">#212121</SolidColorBrush>
+          <SolidColorBrush x:Key="Ink">White</SolidColorBrush>
+          <SolidColorBrush x:Key="Muted">#B3FFFFFF</SolidColorBrush>
+          <SolidColorBrush x:Key="Divider">#1FFFFFFF</SolidColorBrush>
+          <SolidColorBrush x:Key="Primary">#90CAF9</SolidColorBrush>
+          <SolidColorBrush x:Key="PrimaryHover">#42A5F5</SolidColorBrush>
+          <SolidColorBrush x:Key="OnPrimary">#DE000000</SolidColorBrush>
+          <SolidColorBrush x:Key="HoverFill">#14FFFFFF</SolidColorBrush>
+          <SolidColorBrush x:Key="SelectedFill">#29FFFFFF</SolidColorBrush>
+          <SolidColorBrush x:Key="PressedFill">#3DFFFFFF</SolidColorBrush>
+          <SolidColorBrush x:Key="FieldFill">#17FFFFFF</SolidColorBrush>
+          <SolidColorBrush x:Key="FieldHover">#21FFFFFF</SolidColorBrush>
+          <SolidColorBrush x:Key="DisabledInk">#4DFFFFFF</SolidColorBrush>
+          <SolidColorBrush x:Key="DisabledFill">#1FFFFFFF</SolidColorBrush>
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+    </ResourceDictionary>
+  </Styles.Resources>
+
+  <Style Selector="TextBlock.secondary">
+    <Setter Property="Foreground" Value="{DynamicResource Muted}" />
+  </Style>
+  <Style Selector="Button.primary, Button.tool">
+    <Setter Property="CornerRadius" Value="12" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="FontWeight" Value="Medium" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+  </Style>
+  <Style Selector="Button.tool">
+    <Setter Property="MinHeight" Value="32" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{DynamicResource Primary}" />
+    <Setter Property="Padding" Value="8,4" />
+  </Style>
+  <Style Selector="Button.icon">
+    <Setter Property="CornerRadius" Value="16" />
+    <Setter Property="Foreground" Value="{DynamicResource Muted}" />
+    <Setter Property="Padding" Value="4" />
+  </Style>
+  <Style Selector="Button.primary">
+    <Setter Property="Background" Value="{DynamicResource Primary}" />
+    <Setter Property="Foreground" Value="{DynamicResource OnPrimary}" />
+  </Style>
+  <Style Selector="Button.primary:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.primary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource PrimaryHover}" />
+    <Setter Property="Foreground" Value="{DynamicResource OnPrimary}" />
+  </Style>
+  <Style Selector="Button.tool:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource HoverFill}" />
+    <Setter Property="Foreground" Value="{TemplateBinding Foreground}" />
+  </Style>
+  <Style Selector="Button.tool:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource PressedFill}" />
+    <Setter Property="Foreground" Value="{TemplateBinding Foreground}" />
+  </Style>
+  <Style Selector="Button:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="BorderBrush" Value="{DynamicResource Primary}" />
+  </Style>
+  <Style Selector="Button.primary:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="BorderBrush" Value="{DynamicResource OnPrimary}" />
+  </Style>
+  <Style Selector="Button.tool:disabled /template/ ContentPresenter#PART_ContentPresenter, Button.primary:disabled /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{DynamicResource DisabledInk}" />
+  </Style>
+  <Style Selector="Button.primary:disabled /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource DisabledFill}" />
+  </Style>
+
+  <Style Selector="TextBox.filled">
+    <Setter Property="PlaceholderForeground" Value="{DynamicResource Muted}" />
+    <Setter Property="Background" Value="{DynamicResource FieldFill}" />
+    <Setter Property="Foreground" Value="{DynamicResource Ink}" />
+    <Setter Property="CaretBrush" Value="{DynamicResource Primary}" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="12" />
+    <Setter Property="FontSize" Value="16" />
+  </Style>
+  <Style Selector="TextBox.filled:pointerover /template/ Border#PART_BorderElement">
+    <Setter Property="Background" Value="{DynamicResource FieldHover}" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+  </Style>
+  <Style Selector="TextBox.filled:focus /template/ Border#PART_BorderElement">
+    <Setter Property="Background" Value="{DynamicResource FieldFill}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Primary}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+  <Style Selector="ListBoxItem">
+    <Setter Property="CornerRadius" Value="0" />
+    <Setter Property="Padding" Value="16,8" />
+    <Setter Property="Foreground" Value="{DynamicResource Ink}" />
+  </Style>
+  <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource HoverFill}" />
+  </Style>
+  <Style Selector="ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource SelectedFill}" />
+    <Setter Property="Foreground" Value="{DynamicResource Ink}" />
+  </Style>
+  <Style Selector="ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter, ListBoxItem:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource PressedFill}" />
+  </Style>
+</Styles>
