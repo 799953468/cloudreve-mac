@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Serilog;
 using Serilog.Events;
 
 namespace Cloudreve.Desktop;
@@ -46,7 +47,7 @@ internal sealed partial class SettingsWindow : Window
         };
         foreach (var (label, url) in aboutLinks)
         {
-            AboutPage.Children.Add(ActionButton(label, async () => { await Launcher.LaunchUriAsync(new Uri(url)); }));
+            AboutPage.Children.Add(ActionButton(label, "Open project link", async () => { await Launcher.LaunchUriAsync(new Uri(url)); }));
         }
 
         host.Changed += RefreshDrives;
@@ -77,7 +78,7 @@ internal sealed partial class SettingsWindow : Window
         RefreshDrives();
     }
 
-    private Button ActionButton(string label, Func<Task> action)
+    private Button ActionButton(string label, string operation, Func<Task> action)
     {
         var button = new Button { Content = label, Classes = { "tool" } };
         button.Click += async (_, _) =>
@@ -90,6 +91,7 @@ internal sealed partial class SettingsWindow : Window
             }
             catch (Exception ex)
             {
+                Log.Logger.WriteFailure(LogEventLevel.Warning, operation, ex);
                 ErrorMessage.Text = ex.Message;
                 ErrorMessage.IsVisible = true;
             }
@@ -135,12 +137,12 @@ internal sealed partial class SettingsWindow : Window
             Grid.SetColumn(status, 1);
             title.Children.Add(status);
             details.Children.Add(title);
-            var site = ActionButton(drive.Account.Site.TrimEnd('/'), async () => { await Launcher.LaunchUriAsync(new Uri(drive.Account.Site)); });
+            var site = ActionButton(drive.Account.Site.TrimEnd('/'), "Open drive site", async () => { await Launcher.LaunchUriAsync(new Uri(drive.Account.Site)); });
             StyleLink(site, "SiteIcon");
             details.Children.Add(site);
             if (pair != null)
             {
-                var folder = ActionButton(Path.GetFileName(pair.Local), () => DesktopFiles.OpenFolderAsync(this, pair.Local));
+                var folder = ActionButton(Path.GetFileName(pair.Local), "Open local sync folder", () => DesktopFiles.OpenFolderAsync(this, pair.Local));
                 ToolTip.SetTip(folder, pair.Local);
                 StyleLink(folder, "FolderOutline");
                 details.Children.Add(folder);
@@ -169,7 +171,7 @@ internal sealed partial class SettingsWindow : Window
             footer.Children.Add(actions);
             if (expired)
             {
-                var reauthorize = ActionButton(DesktopText.Get("settings.reauthorize"), () =>
+                var reauthorize = ActionButton(DesktopText.Get("settings.reauthorize"), "Reauthorize drive", () =>
                 {
                     host.OpenAdd(drive);
                     return Task.CompletedTask;
@@ -180,13 +182,13 @@ internal sealed partial class SettingsWindow : Window
 
             if (pair != null)
             {
-                var rules = ActionButton(DesktopText.Get("settings.ignorePatterns"), () => EditRulesAsync(drive));
+                var rules = ActionButton(DesktopText.Get("settings.ignorePatterns"), "Edit ignore rules", () => EditRulesAsync(drive));
                 rules.Classes.Add("subtle");
                 IconLabel(rules, "FilterIcon");
                 actions.Children.Add(rules);
             }
 
-            var delete = ActionButton(DesktopText.Get("settings.deleteDrive"), async () =>
+            var delete = ActionButton(DesktopText.Get("settings.deleteDrive"), "Remove drive", async () =>
             {
                 string message = DesktopText.Get("settings.deleteDriveConfirm").Replace("{{name}}", name);
                 if (await ConfirmDeleteAsync(message))
@@ -277,7 +279,7 @@ internal sealed partial class SettingsWindow : Window
         Toggle(notifications, "notifyCredentialExpired", prefs.Current.CredentialAlerts, v => prefs.Save(prefs.Current with { CredentialAlerts = v }));
         Toggle(notifications, "notifyFileConflict", prefs.Current.ConflictAlerts, v => prefs.Save(prefs.Current with { ConflictAlerts = v }));
         var logs = Group("logSettings");
-        var open = ActionButton(DesktopText.Get("settings.openFolder"), async () =>
+        var open = ActionButton(DesktopText.Get("settings.openFolder"), "Open log folder", async () =>
         {
             Directory.CreateDirectory(DesktopFiles.LogDirectory);
             await DesktopFiles.OpenFolderAsync(this, DesktopFiles.LogDirectory);
@@ -417,6 +419,7 @@ internal sealed partial class SettingsWindow : Window
         }
         catch (Exception ex)
         {
+            Log.Logger.WriteFailure(LogEventLevel.Warning, "Apply desktop setting", ex);
             ErrorMessage.Text = ex.Message;
             ErrorMessage.IsVisible = true;
             BuildGeneral();

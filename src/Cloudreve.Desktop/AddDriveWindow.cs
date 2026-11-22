@@ -113,6 +113,7 @@ internal sealed partial class AddDriveWindow : Window
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
+            Log.Logger.WriteFailure(LogEventLevel.Debug, "Validate local sync folder", ex);
             invalidFolder = true;
             ShowError(ex.Message);
         }
@@ -196,7 +197,8 @@ internal sealed partial class AddDriveWindow : Window
         }
         catch (Exception ex) when (!lifetime.IsCancellationRequested)
         {
-            Log.Logger.WriteFailure(LogEventLevel.Warning, "Configure drive", ex);
+            Log.Logger.ForContext("Stage", step).ForContext("Reauthorizing", Reauthorizing)
+                .WriteFailure(LogEventLevel.Warning, "Configure drive", ex);
             if (step == Step.Installing)
             {
                 step = verified == null ? Step.Address : Step.Setup;

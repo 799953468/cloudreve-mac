@@ -1,4 +1,6 @@
 using System.Net;
+using System.Net.Sockets;
+using System.Text.Json;
 using Cloudreve.Desktop;
 using Serilog;
 using Serilog.Events;
@@ -31,8 +33,47 @@ public sealed class DesktopLogTests
             Assert.DoesNotContain("Not visible", log);
             File.WriteAllText(Path.Combine(directory, "preferences.json"), "invalid");
             var defaults = new DesktopPreferences(directory);
-            defaults.Load();
+            Assert.IsType<JsonException>(defaults.Load());
             Assert.Equal(new DisplayPreferences(), defaults.Current);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [Fact]
+    public void LogsTypedNetworkCausesWithoutLeakingMessagesOrArbitraryData()
+    {
+        var root = Directory.CreateTempSubdirectory();
+        try
+        {
+            var cause = new IOException("/private/file", new SocketException((int)SocketError.ConnectionRefused));
+            var request = new HttpRequestException(HttpRequestError.ConnectionError, "https://private/?token=secret", cause);
+            request.Data["CloudreveCode"] = "private-code";
+            using (var log = DesktopLog.CreateLogger(root.FullName))
+            {
+                log.WriteFailure(LogEventLevel.Warning, "Synchronize folder pair", request);
+                log.WriteFailure(LogEventLevel.Warning, "Read remote metadata", new IOException("private") { Data = { ["CloudreveCode"] = 40011 } });
+            }
+
+            var lines = File.ReadAllLines(Assert.Single(Directory.GetFiles(root.FullName, "desktop-*.log")));
+            using (var json = JsonDocument.Parse(lines[0][lines[0].IndexOf('{')..]))
+            {
+                var fields = json.RootElement;
+                Assert.Equal("ConnectionError", fields.GetProperty("HttpRequestError").GetString());
+                Assert.Equal(JsonValueKind.Null, fields.GetProperty("HttpStatus").ValueKind);
+                Assert.Equal("ConnectionRefused", fields.GetProperty("SocketError").GetString());
+                Assert.Equal(new[] { "IOException", "SocketException" }, fields.GetProperty("Causes").EnumerateArray().Select(item => item.GetString()));
+                Assert.False(fields.TryGetProperty("CloudreveCode", out _));
+            }
+
+            Assert.Contains("40011", lines[1]);
+            Assert.All(lines, line =>
+            {
+                Assert.DoesNotContain("private", line);
+                Assert.DoesNotContain("secret", line);
+            });
         }
         finally
         {

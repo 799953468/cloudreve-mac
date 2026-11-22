@@ -131,7 +131,7 @@ internal sealed class TransferQueue(string directory)
             }
             catch (JsonException ex)
             {
-                Log.Logger.WriteFailure(LogEventLevel.Warning, "Read transfer cache", ex);
+                Log.Logger.ForContext("CacheType", typeof(T).Name).WriteFailure(LogEventLevel.Warning, "Read transfer cache", ex);
                 return null;
             }
         }
@@ -304,8 +304,9 @@ internal sealed class TransferFiles(string prefix)
             {
                 receipt = JsonSerializer.Deserialize<Receipt>(journal.AsSpan(position, end - position));
             }
-            catch (JsonException)
+            catch (JsonException ex)
             {
+                Log.Logger.ForContext("VerifiedParts", state.NextPart).WriteFailure(LogEventLevel.Debug, "Read upload receipt journal", ex);
                 break;
             }
 

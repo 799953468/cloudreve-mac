@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -22,17 +24,23 @@ internal static class Program
             return 1;
         }
 
-        Preferences.Load();
+        var uptime = Stopwatch.StartNew();
+        Exception? preferencesError = Preferences.Load();
         Log.Logger = DesktopLog.CreateLogger(DesktopFiles.LogDirectory, Preferences.LogLevel, Preferences.Current.LogToFile, Preferences.Current.LogMaxFiles);
         UiText.Language = UiText.Resolve(Preferences.Current.Language);
         try
         {
-            Log.Information("Starting Cloudreve Desktop");
+            Log.Information("Starting Cloudreve Desktop {Version} ({Architecture}, .NET {RuntimeVersion}, PID {ProcessId}, log level {LogLevel})",
+                typeof(Program).Assembly.GetName().Version, RuntimeInformation.ProcessArchitecture, Environment.Version, Environment.ProcessId, Preferences.Current.LogLevel);
+            if (preferencesError != null)
+            {
+                Log.Logger.WriteFailure(LogEventLevel.Warning, "Read desktop preferences", preferencesError);
+            }
             int exitCode = AppBuilder.Configure<DesktopApp>()
                 .UsePlatformDetect()
                 .With(new MacOSPlatformOptions { ShowInDock = false })
                 .StartWithClassicDesktopLifetime(args);
-            Log.Information("Cloudreve Desktop stopped with exit code {ExitCode}", exitCode);
+            Log.Information("Cloudreve Desktop stopped with exit code {ExitCode} after {UptimeMs} ms", exitCode, uptime.ElapsedMilliseconds);
             return exitCode;
         }
         catch (Exception ex)

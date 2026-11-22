@@ -5,6 +5,63 @@ namespace Cloudreve.Sync.Tests;
 
 public sealed class PairWakeTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task HealthyWatchersSkipPollTicksUntilChangeOrDisconnect(bool changed)
+    {
+        var root = Directory.CreateTempSubdirectory("cloudreve-idle-");
+        var wake = new PairWake(TimeSpan.FromMilliseconds(30));
+        try
+        {
+            using (var watcher = wake.WatchLocal(root.FullName))
+            using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+            {
+                Assert.NotNull(watcher);
+                wake.SetRemoteAvailable(true);
+                var next = wake.WaitForNextScanAsync(false, timeout.Token);
+                await Task.Delay(TimeSpan.FromMilliseconds(180), timeout.Token);
+                Assert.False(next.IsCompleted);
+
+                if (changed)
+                {
+                    File.WriteAllText(Path.Combine(root.FullName, "changed"), "new");
+                }
+                else
+                {
+                    wake.SetRemoteAvailable(false);
+                }
+
+                await next;
+            }
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [Fact]
+    public async Task HealthyWatchersCanStayIdleUntilShutdown()
+    {
+        var root = Directory.CreateTempSubdirectory("cloudreve-idle-");
+        var wake = new PairWake(TimeSpan.FromMilliseconds(25));
+        try
+        {
+            using (var watcher = wake.WatchLocal(root.FullName))
+            using (var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(300)))
+            {
+                Assert.NotNull(watcher);
+                wake.SetRemoteAvailable(true);
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => wake.WaitForNextScanAsync(false, timeout.Token));
+            }
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
     [Fact]
     public async Task NotificationsDuringFailureDoNotBypassRetryOrQueueAnotherPass()
     {

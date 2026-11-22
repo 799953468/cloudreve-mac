@@ -59,7 +59,7 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
             watcher = wake.WatchLocal(Pair.Local);
             ILogger logger = Log.Logger.ForContext("PairId", Pair.Marker);
             workers = Task.WhenAll(capacity, ScanAsync(engine, wake, logger, lifetime.Token),
-                wake.WatchRemoteAsync(client, Pair.Remote, lifetime.Token, connected => { PushLost = !connected; }));
+                wake.WatchRemoteAsync(client, Pair.Remote, lifetime.Token, connected => { PushLost = !connected; }, logger));
         }
     }
 

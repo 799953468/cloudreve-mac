@@ -37,9 +37,9 @@ internal sealed class SessionFileStore
             {
                 return Validate(JsonSerializer.Deserialize<DriveSession>(stream));
             }
-            catch (JsonException)
+            catch (JsonException ex)
             {
-                throw new InvalidDataException(UiText.Get("本机登录文件格式无效，请重新连接云盘。"));
+                throw new InvalidDataException(UiText.Get("本机登录文件格式无效，请重新连接云盘。"), ex);
             }
         }
     }

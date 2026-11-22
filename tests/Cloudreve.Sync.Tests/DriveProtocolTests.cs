@@ -320,6 +320,64 @@ public sealed class DriveProtocolTests
     }
 
     [Theory]
+    [InlineData("subscribed")]
+    [InlineData("resumed")]
+    [InlineData("event")]
+    [InlineData("connected")]
+    public async Task EventPushRecoversAndWakesScannerAfterTransportFailure(string confirmation)
+    {
+        var root = Directory.CreateTempSubdirectory();
+        try
+        {
+            int requests = 0;
+            var online = new List<bool>();
+            var wake = new PairWake();
+            using (var stop = new CancellationTokenSource(TimeSpan.FromSeconds(8)))
+            using (var log = DesktopLog.CreateLogger(root.FullName))
+            using (var http = new HttpClient(new Handler(_ =>
+                   {
+                       if (++requests == 1)
+                       {
+                           throw new HttpRequestException(HttpRequestError.NameResolutionError, "private-host");
+                       }
+
+                       return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                       {
+                           Content = new StringContent($"event: {confirmation}\ndata: private-payload\n\n", Encoding.UTF8, "text/event-stream")
+                       });
+                   })))
+            {
+                var client = new DriveClient(http, http, Session(), _ => { });
+                await wake.WatchRemoteAsync(client, "cloudreve://my/private-root", stop.Token, connected =>
+                {
+                    online.Add(connected);
+                    if (connected)
+                    {
+                        stop.Cancel();
+                    }
+                }, log);
+            }
+
+            Assert.Equal(new[] { false, true }, online);
+            using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2)))
+            {
+                await wake.WaitAsync(Timeout.InfiniteTimeSpan, timeout.Token);
+            }
+
+            string text = File.ReadAllText(Assert.Single(Directory.GetFiles(root.FullName, "desktop-*.log")));
+            Assert.Contains("NameResolutionError", text);
+            Assert.Contains("RetryInSeconds", text);
+            Assert.Contains("Remote event push connected", text);
+            Assert.Equal(1, text.Split("[WRN]").Length - 1);
+            Assert.DoesNotContain("private", text);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [Theory]
     [InlineData("")]
     [InlineData("event: reconnect-required\ndata: <nil>\n\n")]
     public async Task EventsReconnectOnEofOrServerRequestAndStopOnCancellation(string ending)

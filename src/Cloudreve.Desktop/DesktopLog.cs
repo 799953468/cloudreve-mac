@@ -1,3 +1,4 @@
+using Cloudreve.Sync;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
@@ -12,7 +13,7 @@ internal static class DesktopLog
         if (logToFile)
         {
             config.WriteTo.File(Path.Combine(directory, "desktop-.log"),
-                outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj} {Properties:j}{NewLine}{Exception}",
+                outputTemplate: FailureLog.OutputTemplate,
                 rollingInterval: RollingInterval.Day,
                 fileSizeLimitBytes: 5 * 1024 * 1024,
                 rollOnFileSizeLimit: true,
@@ -24,7 +25,12 @@ internal static class DesktopLog
 
     internal static void WriteFailure(this ILogger logger, LogEventLevel level, string operation, Exception exception)
     {
-        // Exception messages may contain callback URLs, signed download URLs or local paths.
+        if (!logger.IsEnabled(level))
+        {
+            return;
+        }
+
+        logger = FailureLog.WithDiagnostics(logger, exception);
         if (exception.Data[nameof(DirectoryCheckFailure)] is DirectoryCheckFailure directoryCheck)
         {
             logger = logger.ForContext(nameof(DirectoryCheckFailure), directoryCheck.ToString());

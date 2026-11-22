@@ -1,4 +1,6 @@
 using Avalonia.Controls;
+using Serilog;
+using Serilog.Events;
 
 namespace Cloudreve.Desktop;
 
@@ -19,6 +21,7 @@ internal sealed partial class IgnoreRulesWindow : Window
             }
             catch (Exception ex)
             {
+                Log.Logger.WriteFailure(LogEventLevel.Warning, "Save ignore rules", ex);
                 SaveError.Text = ex.Message;
                 SaveError.IsVisible = true;
                 RulesEditor.Focus();

@@ -5,6 +5,8 @@ using System.Net.Http.Json;
 using System.Net.ServerSentEvents;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Serilog;
+using Serilog.Events;
 
 namespace Cloudreve.Desktop;
 
@@ -387,13 +389,17 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
         }
     }
 
-    internal async Task WatchAsync(string directory, Action<string> notify, CancellationToken cancel)
+    internal async Task WatchAsync(string directory, Action<string> notify, CancellationToken cancel, ILogger? logger = null)
     {
+        logger ??= Log.Logger;
         TimeSpan delay = TimeSpan.FromSeconds(1);
         var url = ApiUri("file/events?uri=" + Uri.EscapeDataString(directory));
         while (true)
         {
             cancel.ThrowIfCancellationRequested();
+            string stage = "Connect";
+            string reason = "EndOfStream";
+            Exception? failure = null;
             try
             {
                 using (var response = await SendAsync(() =>
@@ -404,16 +410,29 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
                        }, cancel))
                 {
                     response.EnsureSuccessStatusCode();
-                    if (response.Content.Headers.ContentType?.MediaType != "text/event-stream")
+                    string? mediaType = response.Content.Headers.ContentType?.MediaType;
+                    if (!string.Equals(mediaType, "text/event-stream", StringComparison.OrdinalIgnoreCase))
                     {
-                        throw new InvalidDataException(UiText.Get("站点未提供目录事件流，可手动刷新。"));
+                        cancel.ThrowIfCancellationRequested();
+                        string received = mediaType?.ToLowerInvariant() switch
+                        {
+                            null => "missing",
+                            "text/html" => "text/html",
+                            "application/json" => "application/json",
+                            _ => "other"
+                        };
+                        logger.Warning("Remote event push unavailable: HTTP {StatusCode}, expected text/event-stream, received {ContentType}; folder polling remains enabled",
+                            (int)response.StatusCode, received);
+                        notify("disconnected");
+                        return;
                     }
 
+                    stage = "ReadStream";
                     using (var stream = await response.Content.ReadAsStreamAsync(cancel))
                     {
                         await foreach (var message in SseParser.Create(stream).EnumerateAsync(cancel))
                         {
-                            if (message.EventType is "subscribed" or "resumed" or "event")
+                            if (message.EventType is "subscribed" or "connected" or "resumed" or "event")
                             {
                                 notify(message.EventType);
                             }
@@ -425,6 +444,7 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
 
                             if (message.EventType == "reconnect-required")
                             {
+                                reason = "ServerRequestedReconnect";
                                 break;
                             }
                         }
@@ -433,15 +453,27 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
             }
             catch (HttpRequestException ex) when (ex.StatusCode == null || (int)ex.StatusCode >= 500)
             {
-                // Transient transport or service failure; reconnect below.
+                failure = ex;
             }
-            catch (IOException)
+            catch (IOException ex)
             {
-                // A reset can occur while reading the event stream body.
+                failure = ex;
             }
-            catch (OperationCanceledException) when (!cancel.IsCancellationRequested)
+            catch (OperationCanceledException ex) when (!cancel.IsCancellationRequested)
             {
-                // HTTP header timeout, not a user cancellation.
+                failure = ex;
+            }
+
+            cancel.ThrowIfCancellationRequested();
+            if (failure != null)
+            {
+                logger.ForContext("Stage", stage).ForContext("RetryInSeconds", delay.TotalSeconds)
+                    .WriteFailure(LogEventLevel.Warning, "Remote event push", failure);
+            }
+            else
+            {
+                var level = reason == "ServerRequestedReconnect" ? LogEventLevel.Information : LogEventLevel.Warning;
+                logger.Write(level, "Remote event stream disconnected: {Reason}; reconnecting in {RetryInSeconds} s", reason, delay.TotalSeconds);
             }
 
             notify("disconnected");

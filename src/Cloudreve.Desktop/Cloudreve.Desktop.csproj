@@ -24,6 +24,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="../Cloudreve.Sync/MacFile.cs" Link="Sync/MacFile.cs" />
+    <Compile Include="../Cloudreve.Sync/FailureLog.cs" Link="Sync/FailureLog.cs" />
     <Compile Remove="WorkspaceWindow.Sync.cs" />
     <Compile Remove="WorkspaceWindow.Files.cs" />
     <Compile Remove="WorkspaceWindow.Activity.cs" />

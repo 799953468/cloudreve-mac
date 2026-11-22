@@ -1,6 +1,5 @@
 using System.Text.Json;
 using Cloudreve.Sync;
-using Serilog;
 using Serilog.Core;
 using Serilog.Events;
 
@@ -21,13 +20,13 @@ internal sealed class DesktopPreferences(string directory)
     internal DisplayPreferences Current { get; private set; } = new();
     internal LoggingLevelSwitch LogLevel { get; } = new();
 
-    internal void Load()
+    internal Exception? Load()
     {
         try
         {
             if (!File.Exists(path))
             {
-                return;
+                return null;
             }
 
             FolderPairStore.CheckDirectory(directory);
@@ -44,8 +43,10 @@ internal sealed class DesktopPreferences(string directory)
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
-            Log.Logger.WriteFailure(LogEventLevel.Warning, "Read desktop preferences", ex);
+            return ex;
         }
+
+        return null;
     }
 
     internal void Save(DisplayPreferences value)

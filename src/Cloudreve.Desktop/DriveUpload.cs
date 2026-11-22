@@ -3,6 +3,8 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Xml.Linq;
+using Serilog;
+using Serilog.Events;
 
 namespace Cloudreve.Desktop;
 
@@ -75,6 +77,7 @@ internal sealed partial class DriveClient
                     catch (Exception ex) when (ex is HttpRequestException or IOException or OperationCanceledException or ObjectDisposedException or JsonException or InvalidOperationException)
                     {
                         // Keep the original failure; the server expires abandoned sessions.
+                        Log.Logger.WriteFailure(LogEventLevel.Debug, "Clean up abandoned upload", ex);
                     }
                 }
 

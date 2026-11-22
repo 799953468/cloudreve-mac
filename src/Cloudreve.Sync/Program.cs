@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Serilog;
@@ -32,18 +33,21 @@ internal static class Program
         }
 
         SyncResult result;
-        using (var log = new LoggerConfiguration().WriteTo.Console(standardErrorFromLevel: LogEventLevel.Verbose).CreateLogger())
+        using (var log = new LoggerConfiguration().WriteTo.Console(outputTemplate: FailureLog.OutputTemplate,
+                   standardErrorFromLevel: LogEventLevel.Verbose).CreateLogger())
         {
+            var timer = Stopwatch.StartNew();
             try
             {
                 result = new SyncEngine(args[1], args[2], args[3]).Run();
                 var level = result.Issues.Count == 0 ? LogEventLevel.Information : LogEventLevel.Warning;
-                log.Write(level, "Sync finished: {Uploaded} uploaded, {Downloaded} downloaded, {Unchanged} unchanged, {IssueCount} issues",
-                    result.Uploaded, result.Downloaded, result.Unchanged, result.Issues.Count);
+                log.Write(level, "Sync finished in {ElapsedMs} ms: {Uploaded} uploaded, {Downloaded} downloaded, {Unchanged} unchanged, {IssueCount} issues",
+                    timer.ElapsedMilliseconds, result.Uploaded, result.Downloaded, result.Unchanged, result.Issues.Count);
             }
             catch (Exception exception)
             {
-                log.Error("Sync failed: {ErrorType}", exception.GetType().Name);
+                FailureLog.WithDiagnostics(log, exception).Error("Sync failed after {ElapsedMs} ms: {ErrorType}",
+                    timer.ElapsedMilliseconds, exception.GetType().Name);
                 result = new SyncResult { Error = exception.Message };
             }
         }

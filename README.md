@@ -8,7 +8,7 @@ Cloudreve Mac is an unofficial macOS sync client for [Cloudreve](https://github.
 
 ## Features
 
-- **Two-way sync.** Sync files and empty folders in both directions. Local changes and server notifications trigger a scan; periodic scans catch missed events.
+- **Two-way sync.** Sync files and empty folders in both directions. Local changes and server notifications trigger a scan. The app polls if either watcher is unavailable.
 - **Multiple drives.** Connect more than one account or site. Each drive has its own local folder, ignore patterns, and transfer queue.
 - **Menu bar activity.** See active transfers and recent changes for one drive or all of them. The waiting list shows each file in queue order, with its drive, folder, and next operation: upload, download, or compare. Closing the panel keeps sync running; quitting the app stops it.
 - **Resumable transfers.** After a restart, Cloudreve Mac checks unfinished work before retrying it. Uploads resume from confirmed chunks and downloads from verified partial files when the storage backend supports it.
@@ -60,6 +60,8 @@ On macOS 13 or later, turn on **Settings > General > Launch at startup** in `Clo
 
 Click the Cloudreve menu bar icon to see which drives are scanning. Each drive shows whether it is checking the local or cloud folder and how many items it has found on that side. A failed scan stays visible until the next attempt.
 
+After a successful pass, a drive with working local and cloud notifications waits for a change without periodically rescanning. If either watcher is unavailable, it polls after 30 seconds instead. A failed pass waits 30 seconds before retrying, even if more notifications arrive.
+
 At startup and during routine sync, the app checks local files and lists remote folders in parallel, reading each folder's pages in order. It waits for complete scans on both sides and rechecks the paired root before transferring or deleting anything.
 
 Local scans, remote scans, and transfers each start with two concurrent operations per drive and can grow to six while work is waiting. Rate limits, service-unavailable responses, or request timeouts stop the current pass and halve the affected limit, down to one. The next pass scans again. Folder changes, moves, deletions, and chunks within a single upload stay sequential.
@@ -69,8 +71,9 @@ Local scans, remote scans, and transfers each start with two concurrent operatio
 ## Troubleshooting
 
 - **The browser doesn't return to the app.** Launch the built `Cloudreve.app` rather than using `dotnet run`. Start **Connect** again and keep that instance open until sign-in finishes.
-- **A transfer keeps failing.** Check the activity panel and `~/Library/Logs/Cloudreve/desktop-*.log`. File logging can be configured in **Settings > General**.
+- **A transfer keeps failing.** Check `Synchronize folder pair failed` in `~/Library/Logs/Cloudreve/desktop-*.log`. `PairId` identifies the pair without exposing its paths. `Stage` and `ElapsedMs` identify what the scan was doing and how long it ran. For HTTP failures, `HttpStatus: null` means the exception carried no HTTP status code; look at `HttpRequestError`, `SocketError`, and `Causes` instead. A numeric `CloudreveCode` is an application error, not an HTTP status. Warnings include these details by default; **Settings > General > Log level > Debug** also records successful scan counts and timing.
 - **A local directory changed since the scan.** If a directory recheck detects a change, the app defers that subtree and continues syncing unrelated edits. The debug scan summary counts these as `DeferredDirectories`, not conflicts. A new scan starts after a 30-second wait. A missing or replaced paired root still stops the scan; `DirectoryCheckFailure` in the warning describes a failed local directory or marker check without logging paths.
+- **Settings says real-time event push is lost.** Push and folder scans are independent. Look for `GET /api/v4/file/events` in the log for the disconnect reason, retry interval, or an unexpected response instead of `text/event-stream`. A confirmed reconnection clears the warning and triggers a catch-up scan. While disconnected, the scanner still polls after at most 30 seconds of waiting; it can fail separately if the site is unreachable.
 - **Reporting a problem?** Don't share `drives.json` files or the `folder-pairs` transfer cache under `~/Library/Application Support/Cloudreve/`. The session files store access and refresh tokens in plaintext, not in Keychain. Other programs running as your macOS user can read them.
 
 ## Contributing
