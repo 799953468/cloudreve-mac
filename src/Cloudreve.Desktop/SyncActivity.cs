@@ -90,6 +90,17 @@ internal sealed class SyncActivity
         return new SyncActivity(state);
     }
 
+    internal ScanPhase Phase
+    {
+        get
+        {
+            lock (state)
+            {
+                return state.Scan.Phase;
+            }
+        }
+    }
+
     internal void SetScan(ScanPhase phase, int itemCount = 0)
     {
         var scan = new ScanStatus(phase, itemCount);

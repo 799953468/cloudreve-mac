@@ -22,14 +22,81 @@ typedef void (*TrayAction)(int);
 
 static CloudreveTray *tray;
 
+// Keep these values in sync with TrayState in MacTray.cs.
+typedef NS_ENUM(int, TrayState) { TrayIdle, TrayDisconnected, TrayScanning, TraySyncing };
+
+static NSImage *trayIcon(TrayState state) {
+    NSImage *image = [NSImage imageWithSize:NSMakeSize(22, 20) flipped:YES drawingHandler:^BOOL(NSRect bounds) {
+        CGContextRef context = NSGraphicsContext.currentContext.CGContext;
+        CGContextBeginTransparencyLayer(context, NULL);
+        CGContextSetRGBStrokeColor(context, 0, 0, 0, 1);
+        CGContextSetLineWidth(context, 1.6);
+        CGContextSetLineCap(context, kCGLineCapRound);
+        CGContextSetLineJoin(context, kCGLineJoinRound);
+
+        CGContextMoveToPoint(context, 6.1, 15.7);
+        CGContextAddCurveToPoint(context, 0.4, 15.7, 0.1, 7.6, 5.8, 7.1);
+        CGContextAddCurveToPoint(context, 7.3, 1.2, 15.5, 1.2, 17, 7.5);
+        CGContextAddCurveToPoint(context, 22.5, 8, 22.2, 15.7, 16.8, 15.7);
+        CGContextClosePath(context);
+        CGContextStrokePath(context);
+
+        CGMutablePathRef badge = CGPathCreateMutable();
+        switch (state) {
+            case TrayScanning:
+                CGPathAddEllipseInRect(badge, NULL, CGRectMake(10.7, 9, 6.6, 6.6));
+                CGPathMoveToPoint(badge, NULL, 16.5, 14.8);
+                CGPathAddLineToPoint(badge, NULL, 20, 18.3);
+                break;
+            case TraySyncing:
+                CGPathMoveToPoint(badge, NULL, 12, 18);
+                CGPathAddLineToPoint(badge, NULL, 12, 10.4);
+                CGPathMoveToPoint(badge, NULL, 9.7, 12.7);
+                CGPathAddLineToPoint(badge, NULL, 12, 10.4);
+                CGPathAddLineToPoint(badge, NULL, 14.3, 12.7);
+                CGPathMoveToPoint(badge, NULL, 18, 10.4);
+                CGPathAddLineToPoint(badge, NULL, 18, 18);
+                CGPathMoveToPoint(badge, NULL, 15.7, 15.7);
+                CGPathAddLineToPoint(badge, NULL, 18, 18);
+                CGPathAddLineToPoint(badge, NULL, 20.3, 15.7);
+                break;
+            case TrayDisconnected:
+                CGPathMoveToPoint(badge, NULL, 4.1, 2.7);
+                CGPathAddLineToPoint(badge, NULL, 18.6, 17.9);
+                break;
+            case TrayIdle:
+                break;
+        }
+
+        // Leave a transparent gap wherever the badge crosses the cloud.
+        CGContextSetBlendMode(context, kCGBlendModeClear);
+        CGContextSetLineWidth(context, 4.1);
+        CGContextAddPath(context, badge);
+        CGContextStrokePath(context);
+        CGContextSetBlendMode(context, kCGBlendModeNormal);
+        CGContextSetLineWidth(context, 1.6);
+        CGContextAddPath(context, badge);
+        CGContextStrokePath(context);
+        CGPathRelease(badge);
+        CGContextEndTransparencyLayer(context);
+        return YES;
+    }];
+    image.template = YES;
+    return image;
+}
+
+void cloudreve_tray_update(TrayState state, const char *description) {
+    NSStatusBarButton *button = tray.item.button;
+    button.image = trayIcon(state);
+    NSString *label = [NSString stringWithUTF8String:description];
+    button.toolTip = label;
+    [button setAccessibilityLabel:label];
+}
+
 void cloudreve_tray_start(TrayAction action, const char *show, const char *add, const char *settings, const char *quit) {
     tray = [CloudreveTray new];
     tray.action = action;
     tray.item = [NSStatusBar.systemStatusBar statusItemWithLength:NSSquareStatusItemLength];
-    NSImage *icon = [NSApp.applicationIconImage copy];
-    icon.size = NSMakeSize(20, 20);
-    tray.item.button.image = icon;
-    tray.item.button.toolTip = @"Cloudreve";
     tray.item.button.target = tray;
     tray.item.button.action = @selector(clicked:);
     [tray.item.button sendActionOn:NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp];

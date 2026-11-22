@@ -1,4 +1,10 @@
 {
+  "tray": {
+    "Idle": "Idle",
+    "Disconnected": "Disconnected",
+    "Scanning": "Scanning",
+    "Syncing": "Syncing"
+  },
   "addDrive": {
     "title": "Add Drive",
     "description": "Enter your Cloudreve site URL to connect",

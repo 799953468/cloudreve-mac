@@ -97,8 +97,24 @@ internal sealed class DesktopApp : Application
             });
             bool en = UiText.Language == UiLanguage.English;
             MacTray.Start(trayAction, en ? "Show" : "显示", en ? "Add new drive" : "添加新云盘", DesktopText.Get("settings.title"), en ? "Quit" : "退出");
+            TrayState? displayed = null;
+            void RefreshTray()
+            {
+                var state = host.Drives.Count == 0 ? TrayState.Disconnected : host.Drives.Max(drive => drive.MenuBarState);
+                if (state != displayed)
+                {
+                    MacTray.Update(state, $"Cloudreve · {DesktopText.Get($"tray.{state}")}");
+                    displayed = state;
+                }
+            }
+
+            var trayTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+            trayTimer.Tick += (_, _) => RefreshTray();
+            RefreshTray();
+            trayTimer.Start();
             desktop.Exit += (_, _) =>
             {
+                trayTimer.Stop();
                 MacTray.Stop();
                 GC.KeepAlive(trayAction);
             };

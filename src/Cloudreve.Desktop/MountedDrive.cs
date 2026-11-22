@@ -13,6 +13,8 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
     private readonly object bindingGate = new();
     private object? binding;
     private HashSet<string> conflicts = [];
+    private bool runningPass;
+    private bool remoteUnavailable;
 
     internal SessionFileStore Store { get; } = store;
     internal DriveSession Account { get; private set; } = null!;
@@ -24,6 +26,24 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
     internal bool Expired { get; private set; }
     internal event Action<string>? Notice;
 
+    internal TrayState MenuBarState
+    {
+        get
+        {
+            if (Pair == null || Expired || remoteUnavailable)
+            {
+                return TrayState.Disconnected;
+            }
+
+            if (runningPass)
+            {
+                return Activity.Phase is ScanPhase.Local or ScanPhase.Remote ? TrayState.Scanning : TrayState.Syncing;
+            }
+
+            return TrayState.Idle;
+        }
+    }
+
     internal void Bind(DriveSession account)
     {
         var current = new object();
@@ -31,6 +51,7 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
         Account = account;
         Expired = account.RefreshExpires <= DateTimeOffset.UtcNow;
         PushLost = false;
+        remoteUnavailable = false;
         PairStore = new FolderPairStore(Path.Combine(Store.DirectoryPath, "folder-pairs"), account);
         Pair = PairStore.Load();
         if (Pair != null)
@@ -102,7 +123,9 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
                 var attempt = new PairScanAttempt();
                 try
                 {
+                    runningPass = true;
                     var result = await Task.Run(() => engine.RunAsync(cancel, attempt, scope), cancel);
+                    remoteUnavailable = false;
                     retry = result.DeferredDirectories > 0;
                     logger.ForContext("ScanScope", attempt.Scope == null ? "Full" : "Paths").Debug("Folder pair scan finished in {ElapsedMs} ms: {Uploaded} uploaded, {Downloaded} downloaded, {Removed} removed, {Conflicts} conflicts, {DeferredDirectories} directories deferred",
                         attempt.ElapsedMs, result.Uploaded, result.Downloaded, result.Removed, result.Conflicts.Count, result.DeferredDirectories);
@@ -117,9 +140,21 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
                 catch (Exception ex) when (!cancel.IsCancellationRequested)
                 {
                     retry = true;
+                    if (ex is HttpRequestException request)
+                    {
+                        remoteUnavailable = request.StatusCode == null || (int)request.StatusCode >= 500;
+                    }
+                    else if (ex is OperationCanceledException)
+                    {
+                        remoteUnavailable = true;
+                    }
                     CheckExpiry(ex);
                     logger.ForContext("Stage", attempt.Stage).ForContext("ElapsedMs", attempt.ElapsedMs)
                         .WriteFailure(LogEventLevel.Warning, "Synchronize folder pair", ex);
+                }
+                finally
+                {
+                    runningPass = false;
                 }
 
                 scope = await signal.WaitForNextScanAsync(retry, cancel);

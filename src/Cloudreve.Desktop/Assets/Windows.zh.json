@@ -1,4 +1,10 @@
 {
+  "tray": {
+    "Idle": "空闲",
+    "Disconnected": "已断开",
+    "Scanning": "正在扫描",
+    "Syncing": "正在同步"
+  },
   "addDrive": {
     "title": "添加网盘",
     "description": "输入您的 Cloudreve 站点 URL 进行连接",
