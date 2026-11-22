@@ -38,6 +38,77 @@ public sealed class FolderPairSyncTests : IDisposable
     }
 
     [Fact]
+    public async Task TrayShowsCompletedTransfersEvenWhenTheWholePassFitsBetweenRefreshes()
+    {
+        var activity = new SyncActivity();
+        File.WriteAllText(Path.Combine(pair.Local, "upload.txt"), "local");
+        site.Put(Root + "/download.txt", "remote");
+
+        var result = await RunAsync(activity);
+
+        Assert.Equal(1, result.Uploaded);
+        Assert.Equal(1, result.Downloaded);
+        Assert.Equal(TrayState.Syncing, activity.ReadTrayState(runningPass: false, disconnected: false));
+        Assert.Equal(TrayState.Idle, activity.ReadTrayState(runningPass: false, disconnected: false));
+
+        await RunAsync(activity);
+        Assert.Equal(TrayState.Scanning, activity.ReadTrayState(runningPass: false, disconnected: false));
+        Assert.Equal(TrayState.Idle, activity.ReadTrayState(runningPass: false, disconnected: false));
+    }
+
+    [Fact]
+    public void LegacyJsonMigrationRollsBackAndPreservesUnicodeScopedEntries()
+    {
+        string name = Path.Combine(Path.GetDirectoryName(store.TransferDirectory(pair))!, pair.Marker.ToString("N") + ".json");
+        var file = new FileBaseline(new string('A', 64), "version", "local", "remote");
+        var rows = new Dictionary<string, FileBaseline> { ["Étage/enfant"] = file, ["../invalid"] = file };
+        File.WriteAllText(name, JsonSerializer.Serialize(rows));
+        Assert.Throws<InvalidDataException>(() => store.ReadBaseline(pair));
+        Assert.True(File.Exists(name));
+        rows.Remove("../invalid");
+        rows.Add("Étage0/enfant", file);
+        File.WriteAllText(name, JsonSerializer.Serialize(rows));
+        Assert.Equal(rows, store.ReadBaseline(pair));
+        Assert.True(File.Exists(name + ".migrated"));
+        using (var database = store.OpenBaseline(pair))
+        {
+            var selected = database.Read(new PairScanScope(["étage"]));
+            Assert.Equal("Étage/enfant", Assert.Single(selected).Key);
+            database.SaveChanges(selected, []);
+        }
+        Assert.Equal("Étage0/enfant", Assert.Single(store.ReadBaseline(pair)).Key);
+    }
+
+    [Fact]
+    public async Task DownloadUsesOrdinaryLocalFilePermissions()
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            throw new PlatformNotSupportedException();
+        }
+        string ordinary = Path.Combine(pair.Local, "ordinary");
+        File.WriteAllText(ordinary, "one");
+        site.Put(Root + "/download", "two");
+        Assert.Equal(1, (await RunAsync()).Downloaded);
+        Assert.Equal(File.GetUnixFileMode(ordinary), File.GetUnixFileMode(Path.Combine(pair.Local, "download")));
+    }
+
+    [Fact]
+    public async Task LocalChangeDuringUploadReadbackDoesNotAdvanceTheBaseline()
+    {
+        string path = Path.Combine(pair.Local, "doc");
+        File.WriteAllText(path, "first");
+        site.BeforeStorageAsync = (_, _) =>
+        {
+            File.WriteAllText(path, "other");
+            return Task.CompletedTask;
+        };
+        await Assert.ThrowsAsync<IOException>(() => RunAsync());
+        Assert.Empty(store.ReadBaseline(pair));
+        Assert.Equal("other", File.ReadAllText(path));
+    }
+
+    [Fact]
     public async Task ScopedEditsVisitOnlyAffectedBranchesAndPreserveOtherBaselines()
     {
         foreach (string folder in new[] { "notes", "other" })
@@ -67,6 +138,33 @@ public sealed class FolderPairSyncTests : IDisposable
         Assert.Equal(before["other/doc"], after["other/doc"]);
         Assert.Equal(before["notes/sibling"], after["notes/sibling"]);
         Assert.NotEqual(before["notes/doc"], after["notes/doc"]);
+    }
+
+    [Fact]
+    public async Task WatcherEditOfExistingFileDoesNotScanUnrelatedTree()
+    {
+        site.Folders.Add(Root + "/notes");
+        site.Folders.Add(Root + "/other");
+        site.Put(Root + "/notes/doc", "original");
+        await RunAsync();
+
+        var wake = new PairWake();
+        using (var watcher = wake.WatchLocal(pair.Local))
+        using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
+        {
+            Assert.NotNull(watcher);
+            wake.SetRemoteAvailable(true);
+            File.WriteAllText(Path.Combine(pair.Local, "notes/doc"), "edited");
+            var scope = await wake.WaitForNextScanAsync(false, timeout.Token);
+            Assert.NotNull(scope);
+            Assert.True(scope.Covers("notes/doc"));
+            Assert.False(scope.Covers("notes/sibling"));
+            site.BeforeList = uri => Assert.NotEqual(Root + "/other", uri);
+            var attempt = new PairScanAttempt();
+            Assert.Equal(1, (await RunAsync(attempt: attempt, scope: scope)).Uploaded);
+            Assert.Same(scope, attempt.Scope);
+            Assert.Equal("edited", site.Files[Root + "/notes/doc"].Text);
+        }
     }
 
     [Theory]

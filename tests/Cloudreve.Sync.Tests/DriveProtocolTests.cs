@@ -32,6 +32,32 @@ public sealed class DriveProtocolTests
     }
 
     [Fact]
+    public async Task OverlappingUploadsShareListingsAndLaterRequestsSeeNewEntries()
+    {
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int listings = 0;
+        using (var api = new HttpClient(new Handler(async request =>
+        {
+            int number = Interlocked.Increment(ref listings);
+            await release.Task.WaitAsync(TestContext.Current.CancellationToken);
+            var files = new[] { new { name = "item" + number, path = "cloudreve://my/item" + number, size = 1, type = 0 } };
+            return Json(new { code = 0, data = new { files, pagination = new { } } });
+        })))
+        {
+            var session = Session();
+            var drive = new DriveClient(api, api, session, _ => { });
+            var cancel = TestContext.Current.CancellationToken;
+            var first = drive.ListForUploadAsync(session.Root, cancel);
+            var second = drive.ListForUploadAsync(session.Root, cancel);
+            release.SetResult();
+            Assert.Equal("item1", Assert.Single(await first).Name);
+            Assert.Equal("item1", Assert.Single(await second).Name);
+            Assert.Equal("item2", Assert.Single(await drive.ListForUploadAsync(session.Root, cancel)).Name);
+            Assert.Equal(2, listings);
+        }
+    }
+
+    [Fact]
     public async Task RestartsEncryptedMultipartUploadAndRetriesOnlyTheOutstandingCallback()
     {
         var directory = Directory.CreateTempSubdirectory();

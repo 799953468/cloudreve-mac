@@ -100,7 +100,7 @@ internal sealed class DesktopApp : Application
             TrayState? displayed = null;
             void RefreshTray()
             {
-                var state = host.Drives.Count == 0 ? TrayState.Disconnected : host.Drives.Max(drive => drive.MenuBarState);
+                var state = host.Drives.Count == 0 ? TrayState.Disconnected : host.Drives.Max(drive => drive.ReadTrayState());
                 if (state != displayed)
                 {
                     MacTray.Update(state, $"Cloudreve · {DesktopText.Get($"tray.{state}")}");

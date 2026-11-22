@@ -12,6 +12,7 @@ internal sealed class PairWake(TimeSpan pollInterval)
     private readonly object gate = new();
     private readonly HashSet<string> pending = new(StringComparer.OrdinalIgnoreCase);
     private bool full;
+    private bool remoteCatchUp;
     private long lastFull = Stopwatch.GetTimestamp();
     private readonly Channel<bool> signals = Channel.CreateBounded<bool>(1);
     private volatile bool localAvailable;
@@ -28,6 +29,28 @@ internal sealed class PairWake(TimeSpan pollInterval)
             full = true;
             pending.Clear();
             signals.Writer.TryWrite(true);
+        }
+    }
+
+    internal void RequestRemoteCatchUp()
+    {
+        lock (gate)
+        {
+            remoteCatchUp = true;
+            signals.Writer.TryWrite(true);
+        }
+    }
+
+    internal void BeginFullRemoteInventory()
+    {
+        lock (gate)
+        {
+            // This listing covers subscription gaps reported before its first request.
+            remoteCatchUp = false;
+            if (!full && pending.Count == 0)
+            {
+                signals.Reader.TryRead(out _);
+            }
         }
     }
 
@@ -73,25 +96,34 @@ internal sealed class PairWake(TimeSpan pollInterval)
         remoteAvailable = available;
     }
 
-    internal async Task<PairScanScope?> WaitForNextScanAsync(bool retry, CancellationToken cancel)
+    internal async Task<PairScanScope?> WaitForNextScanAsync(bool retry, CancellationToken cancel, PairScanScope? retryScope = null)
     {
         if (retry)
         {
             // Notifications during a failed pass must not bypass the retry delay.
             await Task.Delay(pollInterval, cancel);
-            return TakeScope(forceFull: true);
+            if (retryScope != null)
+            {
+                SignalPaths(retryScope.Targets);
+            }
+            return TakeScope(retryScope == null || PollDue());
         }
 
         while (true)
         {
             // Recheck both watchers on short ticks without walking either tree.
             bool signaled = await WaitAsync(pollInterval, cancel);
-            bool poll = (!localAvailable || !remoteAvailable) && Stopwatch.GetElapsedTime(lastFull) >= pollInterval;
+            bool poll = PollDue();
             if (signaled || poll)
             {
                 return TakeScope(poll);
             }
         }
+    }
+
+    private bool PollDue()
+    {
+        return (!localAvailable || !remoteAvailable) && Stopwatch.GetElapsedTime(lastFull) >= pollInterval;
     }
 
     private PairScanScope? TakeScope(bool forceFull)
@@ -100,7 +132,7 @@ internal sealed class PairWake(TimeSpan pollInterval)
         {
             signals.Reader.TryRead(out _);
             PairScanScope? scope = null;
-            if (forceFull || full)
+            if (forceFull || full || remoteCatchUp)
             {
                 lastFull = Stopwatch.GetTimestamp();
             }
@@ -111,6 +143,7 @@ internal sealed class PairWake(TimeSpan pollInterval)
 
             pending.Clear();
             full = false;
+            remoteCatchUp = false;
             return scope;
         }
     }
@@ -214,7 +247,7 @@ internal sealed class PairWake(TimeSpan pollInterval)
 
                 if (message == "resumed" || online && (wasDisconnected || firstConnection))
                 {
-                    Signal();
+                    RequestRemoteCatchUp();
                 }
                 else if (message == "event")
                 {

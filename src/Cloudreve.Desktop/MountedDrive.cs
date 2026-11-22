@@ -26,22 +26,9 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
     internal bool Expired { get; private set; }
     internal event Action<string>? Notice;
 
-    internal TrayState MenuBarState
+    internal TrayState ReadTrayState()
     {
-        get
-        {
-            if (Pair == null || Expired || remoteUnavailable)
-            {
-                return TrayState.Disconnected;
-            }
-
-            if (runningPass)
-            {
-                return Activity.Phase is ScanPhase.Local or ScanPhase.Remote ? TrayState.Scanning : TrayState.Syncing;
-            }
-
-            return TrayState.Idle;
-        }
+        return Activity.ReadTrayState(runningPass, Pair == null || Expired || remoteUnavailable);
     }
 
     internal void Bind(DriveSession account)
@@ -75,8 +62,8 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
         workers = capacity;
         if (Pair != null)
         {
-            var engine = new FolderPairSync(PairStore, Pair, client, Activity);
             wake = new PairWake();
+            var engine = new FolderPairSync(PairStore, Pair, client, Activity, wake.BeginFullRemoteInventory);
             watcher = wake.WatchLocal(Pair.Local);
             ILogger logger = Log.Logger.ForContext("PairId", Pair.Marker);
             workers = Task.WhenAll(capacity, ScanAsync(engine, wake, logger, lifetime.Token),
@@ -157,7 +144,7 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
                     runningPass = false;
                 }
 
-                scope = await signal.WaitForNextScanAsync(retry, cancel);
+                scope = await signal.WaitForNextScanAsync(retry, cancel, attempt.Scope);
             }
         }
         catch (Exception) when (cancel.IsCancellationRequested)

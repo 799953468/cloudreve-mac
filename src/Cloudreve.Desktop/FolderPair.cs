@@ -98,6 +98,8 @@ internal sealed class FolderPairStore
 
             File.Delete(Path.Combine(directory, "pair.json"));
             File.Delete(BaselinePath(pair));
+            File.Delete(BaselinePath(pair) + ".migrated");
+            File.Delete(Path.ChangeExtension(BaselinePath(pair), ".sqlite"));
             File.Delete(RulesPath(pair));
         }
     }
@@ -117,18 +119,23 @@ internal sealed class FolderPairStore
 
     internal Dictionary<string, FileBaseline> ReadBaseline(FolderPair pair)
     {
-        string path = BaselinePath(pair);
-        if (!File.Exists(path))
+        using (var database = OpenBaseline(pair))
         {
-            return [];
+            return database.Read();
         }
-
-        return JsonSerializer.Deserialize<Dictionary<string, FileBaseline>>(File.ReadAllText(path)) ?? throw new InvalidDataException(UiText.Get("同步基线无效。"));
     }
 
     internal void SaveBaseline(FolderPair pair, Dictionary<string, FileBaseline> baseline)
     {
-        WriteJson(BaselinePath(pair), baseline);
+        using (var database = OpenBaseline(pair))
+        {
+            database.SaveChanges(database.Read(), baseline);
+        }
+    }
+
+    internal BaselineDatabase OpenBaseline(FolderPair pair)
+    {
+        return new BaselineDatabase(BaselinePath(pair));
     }
 
     private string CachePath(FolderPair pair)

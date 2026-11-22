@@ -15,8 +15,8 @@ internal sealed record ScanRow(string Drive, ScanStatus Scan)
         {
             return Scan.Phase switch
             {
-                ScanPhase.Local => DesktopText.Get("popup.scanLocal"),
-                ScanPhase.Remote => DesktopText.Get("popup.scanRemote"),
+                ScanPhase.Local => DesktopText.Get(Scan.IsScoped ? "popup.scanLocalChanges" : "popup.scanLocal"),
+                ScanPhase.Remote => DesktopText.Get(Scan.IsScoped ? "popup.scanRemoteChanges" : "popup.scanRemote"),
                 ScanPhase.Failed => DesktopText.Get("popup.scanRetry"),
                 _ => throw new InvalidOperationException()
             };

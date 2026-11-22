@@ -71,7 +71,7 @@ internal sealed partial class FolderPairSync
                     }
 
                     string path = Path.Combine(pair.Local, key);
-                    await RequireLocalAsync(key, here!.Hash, cancel);
+                    await RequireLocalAsync(key, here!.Hash, cancel, here);
                     await drive.UploadAsync(path, target, file, cancel, progress, files, saved);
                     var uploaded = await drive.StatAsync(target, cancel);
                     // A resumed local/relay upload has no separate finalize call. Only replace our own stranded placeholder.
@@ -82,13 +82,13 @@ internal sealed partial class FolderPairSync
                         await drive.CancelUploadAsync(target, saved.SessionId, cancel);
                         File.Delete(files.UploadPath);
                         target = await ResolveRemoteAsync(key, file, false, cancel, requireParents: true);
-                        await RequireLocalAsync(key, here.Hash, cancel);
+                        await RequireLocalAsync(key, here.Hash, cancel, here);
                         await drive.UploadAsync(path, target, file, cancel, progress, files);
                         uploaded = await drive.StatAsync(target, cancel);
                     }
 
                     file = PairInventory.RequireVersion(uploaded, target);
-                    if (await CompareRemoteHashAsync(key, file, here.Hash, progress, cancel) != here.Hash)
+                    if (await CompareRemoteHashAsync(key, file, here.Hash, progress, cancel, here) != here.Hash)
                     {
                         throw new IOException(UiText.Get("云端回读与上传前的文件内容不同，未记录为已同步。"));
                     }
@@ -100,7 +100,7 @@ internal sealed partial class FolderPairSync
                     break;
                 case SyncAction.CompareContents:
                     progress?.Start(UiText.Get("核对内容"), key);
-                    if (await CompareRemoteHashAsync(key, file!, here!.Hash, progress, cancel) != here.Hash)
+                    if (await CompareRemoteHashAsync(key, file!, here!.Hash, progress, cancel, here) != here.Hash)
                     {
                         progress?.Finish(UiText.Get("冲突"));
                         return new CompletedTransfer(item, null);

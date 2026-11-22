@@ -6,6 +6,27 @@ namespace Cloudreve.Sync.Tests;
 public sealed class SyncActivityTests
 {
     [Fact]
+    public void TrayShowsActivityDuringRetryUntilThePassFinishes()
+    {
+        var activity = new SyncActivity();
+        Assert.Equal(TrayState.Disconnected, activity.ReadTrayState(false, true));
+        activity.SetScan(ScanPhase.Remote);
+        Assert.Equal(TrayState.Scanning, activity.ReadTrayState(true, true));
+        activity.SetScan(ScanPhase.Idle);
+        var worker = activity.CreateWorker();
+        worker.Start("下载", "file");
+        Assert.Equal(TrayState.Syncing, activity.ReadTrayState(true, true));
+        Assert.Equal(TrayState.Syncing, activity.ReadTrayState(true, true));
+        worker.Finish("完成");
+        Assert.Equal(TrayState.Syncing, activity.ReadTrayState(true, true));
+        Assert.Equal(TrayState.Idle, activity.ReadTrayState(false, false));
+
+        activity.SetScan(ScanPhase.Local);
+        activity.SetScan(ScanPhase.Failed);
+        Assert.Equal(TrayState.Disconnected, activity.ReadTrayState(false, true));
+    }
+
+    [Fact]
     public async Task PausedUploadWritesNothingUntilResumedAndCountsAbsoluteOffsets()
     {
         var temp = Directory.CreateTempSubdirectory();

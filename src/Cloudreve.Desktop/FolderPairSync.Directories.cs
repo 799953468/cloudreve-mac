@@ -78,6 +78,7 @@ internal sealed partial class FolderPairSync
             {
                 if (previous.LocalId != null)
                 {
+                    activity?.MarkSyncWork();
                     await VerifyRemoteRootAsync(cancel);
                     await ResolveRemoteAsync(key, null, false, cancel);
                     if (DeferIfChanged(key))
@@ -108,6 +109,7 @@ internal sealed partial class FolderPairSync
 
             if (here == null || there == null)
             {
+                activity?.MarkSyncWork();
                 FolderPairStore.Verify(pair);
                 await VerifyRemoteRootAsync(cancel);
                 string name = Path.GetFileName(key);

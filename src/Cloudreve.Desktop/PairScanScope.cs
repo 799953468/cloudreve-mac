@@ -21,6 +21,16 @@ internal sealed class PairScanScope
         }
     }
 
+    internal IEnumerable<string> Targets
+    {
+        get { return targets; }
+    }
+
+    internal IEnumerable<string> Ancestors
+    {
+        get { return ancestors; }
+    }
+
     internal bool Covers(string key)
     {
         for (string? path = key; !string.IsNullOrEmpty(path); path = Path.GetDirectoryName(path))
@@ -39,7 +49,7 @@ internal sealed class PairScanScope
         return ancestors.Contains(key) || Covers(key);
     }
 
-    internal bool NeedsFullInventory(Dictionary<string, FileBaseline> baseline, PairInventory local, PairInventory remote)
+    internal bool NeedsFullInventory(Dictionary<string, FileBaseline> baseline, PairInventory local, PairInventory remote, BaselineDatabase database)
     {
         foreach (string parent in ancestors)
         {
@@ -62,22 +72,14 @@ internal sealed class PairScanScope
         var remoteIds = remote.Nodes.Values.Where(node => node.Remote?.Id != null).Select(node => node.Remote!.Id!).ToHashSet();
         foreach (var (key, known) in baseline)
         {
-            if (Visits(key))
+            // The database returned only visited paths. A lone disappearance can be one half of a move.
+            if (!local.Nodes.ContainsKey(key) && known.LocalId != null && !localIds.Contains(known.LocalId) ||
+                !remote.Nodes.ContainsKey(key) && known.RemoteId != null && !remoteIds.Contains(known.RemoteId))
             {
-                // A lone disappearance may be one half of a move delivered in a different batch.
-                if (!local.Nodes.ContainsKey(key) && known.LocalId != null && !localIds.Contains(known.LocalId) ||
-                    !remote.Nodes.ContainsKey(key) && known.RemoteId != null && !remoteIds.Contains(known.RemoteId))
-                {
-                    return true;
-                }
-            }
-            else if (known.LocalId != null && localIds.Contains(known.LocalId) || known.RemoteId != null && remoteIds.Contains(known.RemoteId))
-            {
-                // An identity crosses the scan boundary. Move and hard-link decisions need both sides.
                 return true;
             }
         }
 
-        return false;
+        return database.HasOutsideIdentity(baseline, local, remote);
     }
 }

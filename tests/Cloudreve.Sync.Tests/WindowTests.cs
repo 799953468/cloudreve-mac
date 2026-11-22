@@ -267,7 +267,7 @@ public sealed class WindowTests : IDisposable
                 Assert.Contains("second.txt", Labels(popup.Tasks));
                 Assert.Equal(waitingLabels, Labels(popup.WaitingItems));
                 Assert.True(popup.ScanSection.IsVisible);
-                Assert.Contains("正在扫描云端文件夹", Labels(popup.ScanItems));
+                Assert.Contains("正在全量扫描云端文件夹", Labels(popup.ScanItems));
                 Assert.Equal("Personal", Assert.Single(popup.ScanItems.Items.OfType<ScanRow>()).Drive);
                 Assert.Equal("正在扫描…", popup.Footer.Text);
                 var backlog = Enumerable.Range(0, SyncActivity.Capacity + 2).Select(i =>
@@ -317,7 +317,11 @@ public sealed class WindowTests : IDisposable
                 Assert.False(popup.Empty.IsVisible);
                 Assert.True(popup.ScanProgress.IsVisible);
                 Assert.Equal("正在扫描…", popup.Footer.Text);
-                Assert.Contains("正在扫描本地文件夹", Labels(popup.ScanItems));
+                Assert.Contains("正在全量扫描本地文件夹", Labels(popup.ScanItems));
+                activity.SetScan(ScanPhase.Local, 42, isScoped: true);
+                popup.Refresh();
+                popup.UpdateLayout();
+                Assert.Contains("正在检查本地变更路径", Labels(popup.ScanItems));
                 Assert.Contains("已发现 42 项", Labels(popup.ScanItems));
 
                 activity.SetScan(ScanPhase.Failed);

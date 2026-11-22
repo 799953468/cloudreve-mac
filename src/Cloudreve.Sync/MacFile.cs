@@ -20,6 +20,40 @@ internal enum DirectoryChangeResult
 
 internal static partial class MacFile
 {
+    [LibraryImport("libSystem.B.dylib", EntryPoint = "fclonefileat", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
+    private static partial int CloneFile(SafeFileHandle source, int destinationDirectory, string destination, uint flags);
+
+    internal static bool TryClone(FileStream source, string destination)
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            return false;
+        }
+        const int currentDirectory = -2; // AT_FDCWD on Darwin
+        // Learn the ordinary creation mode on this volume without changing the process-wide umask.
+        UnixFileMode mode;
+        using (var probe = File.OpenHandle(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, FileOptions.DeleteOnClose))
+        {
+            mode = File.GetUnixFileMode(probe);
+        }
+        if (CloneFile(source.SafeFileHandle, currentDirectory, destination, 0) == 0)
+        {
+            using (var clone = File.OpenHandle(destination, FileMode.Open, FileAccess.Write, FileShare.None))
+            {
+                File.SetUnixFileMode(clone, mode);
+                RandomAccess.FlushToDisk(clone);
+            }
+            return true;
+        }
+
+        int error = Marshal.GetLastPInvokeError();
+        if (error is 18 or 45 or 78 or 102) // EXDEV, ENOTSUP, ENOSYS, EOPNOTSUPP
+        {
+            return false;
+        }
+        throw new IOException(Marshal.GetPInvokeErrorMessage(error), error);
+    }
+
     [LibraryImport("libSystem.B.dylib", EntryPoint = "open", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
     private static partial SafeFileHandle OpenDirectory(string path, int flags);
 

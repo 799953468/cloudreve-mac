@@ -24,7 +24,7 @@ internal enum ScanPhase
     Failed
 }
 
-internal readonly record struct ScanStatus(ScanPhase Phase, int ItemCount = 0);
+internal readonly record struct ScanStatus(ScanPhase Phase, int ItemCount = 0, bool IsScoped = false);
 internal sealed record ActivitySnapshot(long Revision, ActiveFile[] Active, ActivityEntry[] Recent, WaitingFile[] Waiting, int WaitingCount, ScanStatus Scan);
 
 internal sealed class SyncActivity
@@ -37,6 +37,8 @@ internal sealed class SyncActivity
         internal readonly LinkedList<WaitingFile> Waiting = new();
         internal readonly Dictionary<string, LinkedListNode<WaitingFile>> WaitingByKey = new(StringComparer.Ordinal);
         internal ScanStatus Scan;
+        internal TrayState PendingTrayState;
+        internal bool StartedSyncWork;
         internal string? HistoryPath;
         internal long Revision;
     }
@@ -90,27 +92,59 @@ internal sealed class SyncActivity
         return new SyncActivity(state);
     }
 
-    internal ScanPhase Phase
+    // The tray samples all drives on the UI thread. Retain brief work until it has been sampled.
+    internal TrayState ReadTrayState(bool runningPass, bool disconnected)
     {
-        get
+        lock (state)
         {
-            lock (state)
+            TrayState pending = state.PendingTrayState;
+            state.PendingTrayState = TrayState.Idle;
+            if (!runningPass && disconnected)
             {
-                return state.Scan.Phase;
+                return TrayState.Disconnected;
             }
+
+            if (pending == TrayState.Syncing || state.Active.Count > 0 || (runningPass && state.StartedSyncWork))
+            {
+                return TrayState.Syncing;
+            }
+
+            if (pending == TrayState.Scanning || (runningPass && state.Scan.Phase is ScanPhase.Local or ScanPhase.Remote))
+            {
+                return TrayState.Scanning;
+            }
+
+            return disconnected ? TrayState.Disconnected : TrayState.Idle;
         }
     }
 
-    internal void SetScan(ScanPhase phase, int itemCount = 0)
+    internal void SetScan(ScanPhase phase, int itemCount = 0, bool isScoped = false)
     {
-        var scan = new ScanStatus(phase, itemCount);
+        var scan = new ScanStatus(phase, itemCount, isScoped);
         lock (state)
         {
             if (state.Scan != scan)
             {
+                if (phase is ScanPhase.Local or ScanPhase.Remote && state.Scan.Phase != phase)
+                {
+                    state.StartedSyncWork = false;
+                    if (state.PendingTrayState == TrayState.Idle)
+                    {
+                        state.PendingTrayState = TrayState.Scanning;
+                    }
+                }
                 state.Scan = scan;
                 state.Revision++;
             }
+        }
+    }
+
+    internal void MarkSyncWork()
+    {
+        lock (state)
+        {
+            state.StartedSyncWork = true;
+            state.PendingTrayState = TrayState.Syncing;
         }
     }
 
@@ -125,6 +159,7 @@ internal sealed class SyncActivity
             }
 
             state.Active.Add(this);
+            MarkSyncWork();
             state.Revision++;
         }
     }

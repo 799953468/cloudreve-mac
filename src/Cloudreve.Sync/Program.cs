@@ -18,6 +18,7 @@ public sealed class SyncResult
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(SyncResult))]
 [JsonSerializable(typeof(Dictionary<string, string>))]
+[JsonSerializable(typeof(LocalSyncState))]
 internal partial class SyncJson : JsonSerializerContext
 {
 }

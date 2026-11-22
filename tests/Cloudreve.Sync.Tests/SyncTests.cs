@@ -24,6 +24,29 @@ public sealed class SyncTests : IDisposable
     }
 
     [Fact]
+    public void UpgradesLegacyStateAndReusesOnlyVerifiedContentVersions()
+    {
+        string left = Path.Combine(local, "formatVersion");
+        string right = Path.Combine(remote, "formatVersion");
+        File.WriteAllText(left, "abc");
+        File.WriteAllText(right, "abc");
+        Directory.CreateDirectory(Path.GetDirectoryName(state)!);
+        string hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData("abc"u8));
+        File.WriteAllText(state, System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string> { ["formatVersion"] = hash }));
+        Assert.Equal(1, Run().Unchanged);
+        Assert.SkipWhen(MacFile.GetContentVersion(left) == null || MacFile.GetContentVersion(right) == null, "Volume lacks content generations.");
+        using (var locked = new FileStream(left, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            Assert.Equal(1, Run().Unchanged);
+        }
+        var modified = File.GetLastWriteTimeUtc(left);
+        File.WriteAllText(left, "xyz");
+        File.SetLastWriteTimeUtc(left, modified);
+        Assert.Equal(1, Run().Uploaded);
+        Assert.Equal("xyz", File.ReadAllText(right));
+    }
+
+    [Fact]
     public void CopiesBothDirectionsAndRecognizesSameLengthEdits()
     {
         Directory.CreateDirectory(Path.Combine(local, "文稿"));

@@ -4,14 +4,17 @@ using System.Text.Json;
 
 namespace Cloudreve.Sync;
 
+internal sealed record LocalFileState(string Hash, MacFile.ContentVersion? Local = null, MacFile.ContentVersion? Remote = null);
+internal sealed record LocalSyncState(int FormatVersion, Dictionary<string, LocalFileState> Files);
+
 public sealed class SyncEngine
 {
     private readonly string local;
     private readonly string remote;
     private readonly string state;
     private readonly SyncResult result = new();
-    private Dictionary<string, string> previous = [];
-    private readonly Dictionary<string, string> next = [];
+    private Dictionary<string, LocalFileState> previous = [];
+    private readonly Dictionary<string, LocalFileState> next = [];
 
     public SyncEngine(string localDirectory, string remoteDirectory, string stateFile)
     {
@@ -36,15 +39,31 @@ public sealed class SyncEngine
         {
             if (File.Exists(state))
             {
-                previous = JsonSerializer.Deserialize(File.ReadAllText(state), SyncJson.Default.DictionaryStringString)
-                    ?? throw new InvalidDataException("同步记录无效。");
+                using (var input = File.OpenRead(state))
+                using (var json = JsonDocument.Parse(input))
+                {
+                    if (json.RootElement.TryGetProperty("formatVersion", out var format) && format.ValueKind == JsonValueKind.Number)
+                    {
+                        var saved = json.RootElement.Deserialize(SyncJson.Default.LocalSyncState);
+                        previous = saved is { FormatVersion: 1, Files: not null } ? saved.Files : throw new InvalidDataException("同步记录无效。");
+                    }
+                    else
+                    {
+#pragma warning disable CS0618 // Keep the one-time migration available in this release.
+                        previous = ReadLegacyJsonState(json.RootElement);
+#pragma warning restore CS0618
+                    }
+                }
             }
 
             VisitDirectory(local, remote, "");
             string temporary = state + "." + Guid.NewGuid().ToString("N");
             try
             {
-                File.WriteAllText(temporary, JsonSerializer.Serialize(next, SyncJson.Default.DictionaryStringString));
+                using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    JsonSerializer.Serialize(output, new LocalSyncState(1, next), SyncJson.Default.LocalSyncState);
+                }
                 File.Move(temporary, state, true);
             }
             finally
@@ -54,6 +73,13 @@ public sealed class SyncEngine
         }
 
         return result;
+    }
+
+    [Obsolete("Unversioned JSON sync state support will be removed in the next release. New state files include formatVersion.")]
+    private static Dictionary<string, LocalFileState> ReadLegacyJsonState(JsonElement root)
+    {
+        var legacy = root.Deserialize(SyncJson.Default.DictionaryStringString) ?? throw new InvalidDataException("同步记录无效。");
+        return legacy.ToDictionary(entry => entry.Key, entry => new LocalFileState(entry.Value));
     }
 
     private static bool Within(string path, string root)
@@ -148,24 +174,25 @@ public sealed class SyncEngine
 
     private void ReconcileFile(string name, string left, string right)
     {
-        string? l = Digest(left);
-        string? r = Digest(right);
-        previous.TryGetValue(name, out string? baseline);
+        previous.TryGetValue(name, out var known);
+        string? baseline = known?.Hash;
+        string? l = Digest(left, baseline, known?.Local, out var localVersion);
+        string? r = Digest(right, baseline, known?.Remote, out var remoteVersion);
         if (l != null && l == r)
         {
-            next[name] = l;
+            next[name] = new LocalFileState(l, localVersion, remoteVersion);
             result.Unchanged++;
         }
         else if (l != null && (r == null || r == baseline))
         {
-            CopyChecked(left, right, l, r);
-            next[name] = l;
+            remoteVersion = CopyChecked(left, right, l, r);
+            next[name] = new LocalFileState(l, localVersion, remoteVersion);
             result.Uploaded++;
         }
         else if (r != null && (l == null || l == baseline))
         {
-            CopyChecked(right, left, r, l);
-            next[name] = r;
+            localVersion = CopyChecked(right, left, r, l);
+            next[name] = new LocalFileState(r, localVersion, remoteVersion);
             result.Downloaded++;
         }
         else
@@ -173,17 +200,18 @@ public sealed class SyncEngine
             // Keep the common ancestor until the user reconciles both copies.
             if (baseline != null)
             {
-                next[name] = baseline;
+                next[name] = known!;
             }
 
             result.Issues.Add($"两端内容不同，未覆盖：{name}");
         }
     }
 
-    private static string? Digest(string path)
+    private static string? Digest(string path, string? cachedHash, MacFile.ContentVersion? cachedVersion, out MacFile.ContentVersion? version)
     {
         CheckDirectory(Path.GetDirectoryName(path)!);
         var type = MacFile.Inspect(path);
+        version = null;
         if (type == null)
         {
             return null;
@@ -194,24 +222,35 @@ public sealed class SyncEngine
             throw new IOException($"文件类型已变化：{path}");
         }
 
+        version = MacFile.GetContentVersion(path);
+        if (version.HasValue && version == cachedVersion && cachedHash?.Length == 64)
+        {
+            return cachedHash;
+        }
         using (var input = File.OpenRead(path))
         {
-            return Convert.ToHexString(SHA256.HashData(input));
+            string hash = Convert.ToHexString(SHA256.HashData(input));
+            if (version.HasValue && MacFile.GetContentVersion(path) != version)
+            {
+                throw new IOException($"读取期间文件发生变化：{path}");
+            }
+            return hash;
         }
     }
 
-    private static void CopyChecked(string source, string destination, string expectedSource, string? expectedDestination)
+    private static MacFile.ContentVersion? CopyChecked(string source, string destination, string expectedSource, string? expectedDestination)
     {
         string stage = Path.Combine(Path.GetDirectoryName(destination)!, ".cloudreve-" + Guid.NewGuid().ToString("N"));
         try
         {
             File.Copy(source, stage, false);
-            if (Digest(stage) != expectedSource || Digest(destination) != expectedDestination)
+            if (Digest(stage, null, null, out var stagedVersion) != expectedSource || Digest(destination, null, null, out _) != expectedDestination)
             {
                 throw new IOException($"复制期间文件发生变化，已停止：{destination}");
             }
 
             File.Move(stage, destination, expectedDestination != null);
+            return stagedVersion;
         }
         finally
         {

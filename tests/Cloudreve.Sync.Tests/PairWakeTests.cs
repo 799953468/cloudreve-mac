@@ -131,6 +131,54 @@ public sealed class PairWakeTests
     }
 
     [Fact]
+    public async Task FullRemoteListingCoversEarlierReconnectAndPreservesLocalEdits()
+    {
+        var wake = new PairWake();
+        wake.RequestRemoteCatchUp();
+        wake.BeginFullRemoteInventory();
+        Assert.False(await wake.WaitAsync(TimeSpan.FromMilliseconds(25), TestContext.Current.CancellationToken));
+
+        wake.RequestRemoteCatchUp();
+        wake.SignalPaths("edited");
+        wake.BeginFullRemoteInventory();
+        var next = await wake.WaitForNextScanAsync(false, TestContext.Current.CancellationToken);
+        Assert.NotNull(next);
+        Assert.True(next.Covers("edited"));
+        Assert.False(next.Covers("other"));
+
+        wake.RequestRemoteCatchUp();
+        Assert.Null(await wake.WaitForNextScanAsync(false, TestContext.Current.CancellationToken));
+        wake.Signal();
+        wake.BeginFullRemoteInventory();
+        Assert.Null(await wake.WaitForNextScanAsync(false, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task FailedPathScanRetriesOriginalAndNewEdits()
+    {
+        var temp = Directory.CreateTempSubdirectory();
+        try
+        {
+            var wake = new PairWake(TimeSpan.FromMilliseconds(50));
+            using (var watcher = wake.WatchLocal(temp.FullName))
+            {
+                Assert.NotNull(watcher);
+                wake.SetRemoteAvailable(true);
+                wake.SignalPaths("another");
+                var next = await wake.WaitForNextScanAsync(true, TestContext.Current.CancellationToken, new PairScanScope(["edited"]));
+                Assert.NotNull(next);
+                Assert.True(next.Covers("edited"));
+                Assert.True(next.Covers("another"));
+                Assert.False(next.Covers("other"));
+            }
+        }
+        finally
+        {
+            temp.Delete(true);
+        }
+    }
+
+    [Fact]
     public async Task ConcurrentHintsCoalesceAndWaitCanBeCancelled()
     {
         var wake = new PairWake();

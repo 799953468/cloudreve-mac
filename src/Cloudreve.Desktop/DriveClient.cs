@@ -5,6 +5,7 @@ using System.Net.Http.Json;
 using System.Net.ServerSentEvents;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Cloudreve.Sync;
 using Serilog;
 using Serilog.Events;
 
@@ -21,6 +22,7 @@ internal sealed record DriveEntry(string Name, string Uri, bool IsFolder, long S
 internal sealed partial class DriveClient(HttpClient api, HttpClient storage, DriveSession initial, Action<DriveSession> persist)
 {
     private readonly SemaphoreSlim refreshLock = new(1, 1);
+    private readonly Dictionary<(string Directory, CancellationToken Batch), Task<List<DriveEntry>>> uploadListings = [];
     private DriveSession session = initial;
 
     private Uri ApiUri(string path)
@@ -105,6 +107,36 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
     {
         var data = await JsonAsync(HttpMethod.Get, "user/capacity", null, cancel);
         return (data.GetProperty("used").GetInt64(), data.GetProperty("total").GetInt64());
+    }
+
+    internal async Task<List<DriveEntry>> ListForUploadAsync(string directory, CancellationToken cancel)
+    {
+        // Workers in one transfer batch share only overlapping requests. Later checks must see new placeholders and collisions.
+        var key = (directory, cancel);
+        Task<List<DriveEntry>> request;
+        lock (uploadListings)
+        {
+            if (!uploadListings.TryGetValue(key, out var active) || active.IsCompleted)
+            {
+                active = ListAsync(directory, cancel);
+                uploadListings[key] = active;
+            }
+            request = active;
+        }
+        try
+        {
+            return await request;
+        }
+        finally
+        {
+            lock (uploadListings)
+            {
+                if (uploadListings.TryGetValue(key, out var active) && active == request)
+                {
+                    uploadListings.Remove(key);
+                }
+            }
+        }
     }
 
     internal async Task<List<DriveEntry>> ListAsync(string directory, CancellationToken cancel)
@@ -236,11 +268,15 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
             }
 
             // Stage on the target volume so the final install is an atomic rename even on an external disk.
-            partial.Stream.Position = 0;
-            using (var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true))
+            cancel.ThrowIfCancellationRequested();
+            if (!MacFile.TryClone(partial.Stream, destination))
             {
-                await partial.Stream.CopyToAsync(output, cancel);
-                output.Flush(true);
+                partial.Stream.Position = 0;
+                using (var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true))
+                {
+                    await partial.Stream.CopyToAsync(output, cancel);
+                    output.Flush(true);
+                }
             }
 
             return Convert.ToHexString(partial.Hash.GetCurrentHash());

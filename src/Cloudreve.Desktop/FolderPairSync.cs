@@ -22,7 +22,7 @@ internal sealed class PairScanAttempt
     internal long ElapsedMs { get { return timer.ElapsedMilliseconds; } }
 }
 
-internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair pair, DriveClient drive, SyncActivity? activity = null)
+internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair pair, DriveClient drive, SyncActivity? activity = null, Action? beginFullRemoteInventory = null)
 {
     private readonly AdaptiveWorkQueue localScan = new();
     private readonly AdaptiveWorkQueue remoteScan = new();
@@ -32,33 +32,33 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
     {
         attempt ??= new PairScanAttempt();
         using (store.Lock(pair))
+        using (var database = store.OpenBaseline(pair))
         {
             TransferQueue queue;
             Dictionary<string, FileBaseline> baseline;
-            Dictionary<string, FileBaseline>? outsideScope = null;
+            Dictionary<string, FileBaseline> original;
             PairIgnoreRules rules;
             PairInventory local, remote;
-            activity?.SetScan(ScanPhase.Local);
+            activity?.SetScan(ScanPhase.Local, isScoped: scope != null);
             try
             {
                 FolderPairStore.Verify(pair);
                 queue = TransferQueue.Open(store.TransferDirectory(pair));
-                baseline = store.ReadBaseline(pair);
-                foreach (string key in baseline.Keys)
-                {
-                    PairInventory.ValidateKey(key);
-                }
-
                 rules = new PairIgnoreRules(store.ReadRules(pair));
                 // A worker can finish before the coordinator gets to commit the batch baseline.
-                if (queue.RestoreVerified(baseline, rules))
+                if (queue.Entries.Count > 0)
                 {
-                    attempt.Stage = "RestoreVerifiedTransfers";
-                    await VerifyRemoteRootAsync(cancel);
-                    store.SaveBaseline(pair, baseline);
+                    var queued = database.ReadPaths(queue.Entries.Select(entry => entry.File.Key));
+                    var restored = new Dictionary<string, FileBaseline>(queued);
+                    if (queue.RestoreVerified(restored, rules))
+                    {
+                        attempt.Stage = "RestoreVerifiedTransfers";
+                        await VerifyRemoteRootAsync(cancel);
+                        database.SaveChanges(queued, restored);
+                    }
                 }
 
-                if (scope != null && LegacyVolumeIds.NeedsUpgrade(baseline))
+                if (scope != null && database.HasLegacyIds())
                 {
                     scope = null;
                 }
@@ -66,17 +66,22 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                 while (true)
                 {
                     attempt.Scope = scope;
-                    activity?.SetScan(ScanPhase.Local);
+                    baseline = database.Read(scope);
+                    activity?.SetScan(ScanPhase.Local, isScoped: scope != null);
                     attempt.Stage = "ScanLocal";
                     local = await PairInventory.ReadLocalAsync(pair, rules, baseline, localScan, cancel,
-                        activity == null ? null : count => activity.SetScan(ScanPhase.Local, count), scope);
-                    activity?.SetScan(ScanPhase.Remote);
+                        activity == null ? null : count => activity.SetScan(ScanPhase.Local, count, scope != null), scope);
+                    activity?.SetScan(ScanPhase.Remote, isScoped: scope != null);
                     attempt.Stage = "VerifyRemoteRoot";
                     await VerifyRemoteRootAsync(cancel);
                     attempt.Stage = "ScanRemote";
+                    if (scope == null)
+                    {
+                        beginFullRemoteInventory?.Invoke();
+                    }
                     remote = await PairInventory.ReadRemoteAsync(pair.Remote, "", drive, rules, remoteScan, cancel,
-                        activity == null ? null : count => activity.SetScan(ScanPhase.Remote, count), scope);
-                    if (scope == null || !scope.NeedsFullInventory(baseline, local, remote))
+                        activity == null ? null : count => activity.SetScan(ScanPhase.Remote, count, scope != null), scope);
+                    if (scope == null || !scope.NeedsFullInventory(baseline, local, remote, database))
                     {
                         break;
                     }
@@ -84,17 +89,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                     scope = null;
                 }
 
-                if (scope != null)
-                {
-                    // Reconciliation may interpret any absent baseline key as a deletion.
-                    // Give it only the keys covered by both inventories.
-                    outsideScope = baseline;
-                    baseline = baseline.Where(entry => scope.Visits(entry.Key)).ToDictionary();
-                    foreach (string key in baseline.Keys)
-                    {
-                        outsideScope.Remove(key);
-                    }
-                }
+                original = new Dictionary<string, FileBaseline>(baseline);
 
                 attempt.Stage = "VerifyRoots";
                 await VerifyRemoteRootAsync(cancel);
@@ -304,15 +299,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
 
                 if (dirty || trashedDirectories.Count > 0)
                 {
-                    if (outsideScope != null)
-                    {
-                        foreach (var (key, value) in baseline)
-                        {
-                            outsideScope.Add(key, value);
-                        }
-                    }
-
-                    store.SaveBaseline(pair, outsideScope ?? baseline);
+                    database.SaveChanges(original, baseline);
                 }
 
                 queue.Complete(finished);
@@ -441,7 +428,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
         {
             string name = parts[i];
             string child = DriveClient.ChildUri(parent, name);
-            var siblings = await drive.ListAsync(parent, cancel);
+            var siblings = requireParents ? await drive.ListForUploadAsync(parent, cancel) : await drive.ListAsync(parent, cancel);
             var matches = siblings.Where(item => string.Equals(item.Name.Normalize(), name, StringComparison.OrdinalIgnoreCase)).ToArray();
             var item = matches.FirstOrDefault();
             bool ownUpload = i == parts.Length - 1 && uploadSession != null && item?.UploadSessionId == uploadSession;
@@ -510,7 +497,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
         throw new InvalidDataException(UiText.Get("同步路径为空。"));
     }
 
-    private async Task RequireLocalAsync(string key, string? expectedHash, CancellationToken cancel)
+    private async Task RequireLocalAsync(string key, string? expectedHash, CancellationToken cancel, PairNode? scanned = null)
     {
         FolderPairStore.Verify(pair);
         cancel.ThrowIfCancellationRequested();
@@ -525,9 +512,17 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                 return;
             }
 
-            if (i == parts.Length - 1 && kind == NodeKind.File && expectedHash != null && await PairInventory.HashAsync(path, cancel) == expectedHash)
+            if (i == parts.Length - 1 && kind == NodeKind.File && expectedHash != null)
             {
-                return;
+                if (scanned?.Hash == expectedHash && scanned.LocalGeneration != 0 &&
+                    MacFile.GetContentVersion(path) is { } current && current.LocalId == scanned.LocalId && current.Generation == scanned.LocalGeneration)
+                {
+                    return;
+                }
+                if (await PairInventory.HashAsync(path, cancel) == expectedHash)
+                {
+                    return;
+                }
             }
 
             if (kind != NodeKind.Directory || i == parts.Length - 1)
@@ -568,12 +563,13 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
         File.Move(Path.Combine(pair.Local, key), RecoveryPath(key));
     }
 
-    private async Task<string> CompareRemoteHashAsync(string key, DriveEntry file, string? expectedHash, SyncActivity? progress, CancellationToken cancel)
+    private async Task<string> CompareRemoteHashAsync(string key, DriveEntry file, string? expectedHash, SyncActivity? progress, CancellationToken cancel,
+        PairNode? scanned = null)
     {
-        await RequireLocalAsync(key, expectedHash, cancel);
+        await RequireLocalAsync(key, expectedHash, cancel, scanned);
         string hash = await drive.HashDownloadAsync(file, cancel, progress);
         await VerifyVersionAsync(file, cancel);
-        await RequireLocalAsync(key, expectedHash, cancel);
+        await RequireLocalAsync(key, expectedHash, cancel, scanned);
         return hash;
     }
 
