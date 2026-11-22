@@ -32,6 +32,16 @@ public sealed class DriveProtocolTests
     }
 
     [Fact]
+    public void QiniuCompletionUsesProviderFieldNames()
+    {
+        var request = new QiniuCompleteRequest([new QiniuPart("tag", 1)]);
+        var body = JsonSerializer.SerializeToElement(request, DriveApiJson.Default.QiniuCompleteRequest);
+        var part = Assert.Single(body.GetProperty("parts").EnumerateArray());
+        Assert.Equal("tag", part.GetProperty("etag").GetString());
+        Assert.Equal(1, part.GetProperty("partNumber").GetInt32());
+    }
+
+    [Fact]
     public async Task OverlappingUploadsShareListingsAndLaterRequestsSeeNewEntries()
     {
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -82,17 +92,21 @@ public sealed class DriveProtocolTests
 
             int sessions = 0, callbacks = 0, merges = 0;
             var parts = new List<int>();
-            using (var api = new HttpClient(new Handler(request =>
+            using (var api = new HttpClient(new Handler(async request =>
             {
                 if (request.RequestUri!.AbsolutePath == "/api/v4/file/upload" && request.Method == HttpMethod.Put)
                 {
+                    var body = await request.Content!.ReadFromJsonAsync<JsonElement>(cancel);
+                    Assert.False(body.TryGetProperty("previous", out _));
+                    Assert.False(body.TryGetProperty("entity_type", out _));
+                    Assert.Equal(UploadCipher.Algorithm, body.GetProperty("encryption_supported")[0].GetString());
                     sessions++;
-                    return Task.FromResult(Json(new { code = 0, data = ticket }));
+                    return Json(new { code = 0, data = ticket });
                 }
 
                 Assert.Equal("/api/v4/callback/s3/upload/callback", request.RequestUri.AbsolutePath);
                 callbacks++;
-                return Task.FromResult(callbacks == 1 ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) : Json(new { code = 0 }));
+                return callbacks == 1 ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) : Json(new { code = 0 });
             })))
             using (var storage = new HttpClient(new Handler(async request =>
             {

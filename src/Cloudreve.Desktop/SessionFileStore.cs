@@ -35,7 +35,7 @@ internal sealed class SessionFileStore
         {
             try
             {
-                return Validate(JsonSerializer.Deserialize<DriveSession>(stream));
+                return Validate(JsonSerializer.Deserialize(stream, DesktopJson.Default.DriveSession));
             }
             catch (JsonException ex)
             {
@@ -63,7 +63,7 @@ internal sealed class SessionFileStore
         {
             using (var output = new FileStream(temporary, options))
             {
-                JsonSerializer.Serialize(output, session);
+                JsonSerializer.Serialize(output, session, DesktopJson.Default.DriveSession);
                 output.Flush(true);
             }
 

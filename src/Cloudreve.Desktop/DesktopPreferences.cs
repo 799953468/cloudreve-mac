@@ -35,7 +35,7 @@ internal sealed class DesktopPreferences(string directory)
                 throw new IOException(UiText.Get("设置必须是普通文件。"));
             }
 
-            var value = JsonSerializer.Deserialize<DisplayPreferences>(File.ReadAllText(path));
+            var value = JsonSerializer.Deserialize(File.ReadAllText(path), DesktopJson.Default.DisplayPreferences);
             if (value != null && Enum.IsDefined(value.LogLevel) && Enum.IsDefined(value.Language) && value.LogMaxFiles is 3 or 5 or 7 or 10)
             {
                 Apply(value);
@@ -63,7 +63,7 @@ internal sealed class DesktopPreferences(string directory)
         {
             using (var output = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
-                JsonSerializer.Serialize(output, value);
+                JsonSerializer.Serialize(output, value, DesktopJson.Default.DisplayPreferences);
                 output.Flush(true);
             }
 

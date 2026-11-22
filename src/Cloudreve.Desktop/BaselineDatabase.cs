@@ -86,7 +86,7 @@ internal sealed class BaselineDatabase : IDisposable
     {
         using (var input = File.OpenRead(path))
         {
-            var legacy = JsonSerializer.Deserialize<Dictionary<string, FileBaseline>>(input)
+            var legacy = JsonSerializer.Deserialize(input, DesktopJson.Default.DictionaryStringFileBaseline)
                 ?? throw new InvalidDataException(UiText.Get("同步基线无效。"));
             WriteRows(legacy, transaction);
         }

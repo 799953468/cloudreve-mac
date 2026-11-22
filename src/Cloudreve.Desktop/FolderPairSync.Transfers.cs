@@ -112,7 +112,7 @@ internal sealed partial class FolderPairSync
             }
 
             var baseline = new FileBaseline(here.Hash!, file!.Version!, here.LocalId, file.Id, LocalGeneration: here.LocalGeneration);
-            FolderPairStore.WriteJson(files.VerifiedPath, baseline);
+            FolderPairStore.WriteJson(files.VerifiedPath, baseline, DesktopJson.Default.FileBaseline);
             progress?.Finish(UiText.Get("完成"));
             return new CompletedTransfer(item, baseline);
         }

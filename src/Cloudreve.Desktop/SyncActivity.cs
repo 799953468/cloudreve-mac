@@ -54,7 +54,7 @@ internal sealed class SyncActivity
     internal SyncActivity(string directory) : this()
     {
         state.HistoryPath = Path.Combine(directory, "recent.json");
-        var recent = TransferQueue.ReadCache<ActivityEntry[]>(state.HistoryPath) ?? [];
+        var recent = TransferQueue.ReadCache(state.HistoryPath, DesktopJson.Default.ActivityEntryArray) ?? [];
         foreach (var entry in recent.TakeLast(Capacity))
         {
             if (entry != null && TransferQueue.IsSafeKey(entry.Key))
@@ -183,7 +183,7 @@ internal sealed class SyncActivity
             {
                 try
                 {
-                    FolderPairStore.WriteJson(state.HistoryPath, state.Recent);
+                    FolderPairStore.WriteJson(state.HistoryPath, state.Recent.ToArray(), DesktopJson.Default.ActivityEntryArray);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {

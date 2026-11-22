@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using Cloudreve.Sync;
 
 namespace Cloudreve.Desktop;
@@ -23,7 +24,7 @@ internal sealed class FolderPairStore
 
     internal FolderPairStore(string settingsRoot, DriveSession session)
     {
-        string identity = JsonSerializer.Serialize(new[] { session.Site, session.UserId, session.DriveId, session.Root });
+        string identity = JsonSerializer.Serialize(new[] { session.Site, session.UserId, session.DriveId, session.Root }, DesktopJson.Default.StringArray);
         string key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
         settings = MacFile.NormalizeSystemPath(settingsRoot);
         directory = Path.Combine(settings, key);
@@ -37,7 +38,7 @@ internal sealed class FolderPairStore
             return null;
         }
 
-        return JsonSerializer.Deserialize<FolderPair>(File.ReadAllText(path)) ?? throw new InvalidDataException(UiText.Get("同步配对记录无效。"));
+        return JsonSerializer.Deserialize(File.ReadAllText(path), DesktopJson.Default.FolderPair) ?? throw new InvalidDataException(UiText.Get("同步配对记录无效。"));
     }
 
     internal FolderPair Create(string localDirectory, string remote, string remoteId)
@@ -65,7 +66,7 @@ internal sealed class FolderPairStore
 
         try
         {
-            WriteJson(Path.Combine(directory, "pair.json"), pair, false);
+            WriteJson(Path.Combine(directory, "pair.json"), pair, DesktopJson.Default.FolderPair, overwrite: false);
             return pair;
         }
         catch
@@ -176,7 +177,7 @@ internal sealed class FolderPairStore
             return "";
         }
 
-        return JsonSerializer.Deserialize<string>(File.ReadAllText(path)) ?? throw new InvalidDataException(UiText.Get("配对忽略规则无效。"));
+        return JsonSerializer.Deserialize(File.ReadAllText(path), DesktopJson.Default.String) ?? throw new InvalidDataException(UiText.Get("配对忽略规则无效。"));
     }
 
     internal void SaveRules(FolderPair pair, string text)
@@ -200,7 +201,7 @@ internal sealed class FolderPairStore
             }
 
             SaveBaseline(pair, baseline);
-            WriteJson(RulesPath(pair), text);
+            WriteJson(RulesPath(pair), text, DesktopJson.Default.String);
         }
     }
 
@@ -256,7 +257,7 @@ internal sealed class FolderPairStore
         return path.Equals(root, StringComparison.OrdinalIgnoreCase) || path.StartsWith(root.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase);
     }
 
-    internal static void WriteJson<T>(string path, T value, bool overwrite = true)
+    internal static void WriteJson<T>(string path, T value, JsonTypeInfo<T> typeInfo, bool overwrite = true)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         string temp = path + "." + Guid.NewGuid().ToString("N");
@@ -270,7 +271,7 @@ internal sealed class FolderPairStore
 
             using (var output = new FileStream(temp, options))
             {
-                JsonSerializer.Serialize(output, value);
+                JsonSerializer.Serialize(output, value, typeInfo);
                 output.Flush(true);
             }
 

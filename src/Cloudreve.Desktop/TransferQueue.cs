@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using Cloudreve.Sync;
 using Serilog;
 using Serilog.Events;
@@ -49,7 +50,7 @@ internal sealed class TransferQueue(string directory)
     internal static TransferQueue Open(string directory)
     {
         var queue = new TransferQueue(directory);
-        var saved = ReadCache<QueuedFile[]>(Path.Combine(directory, Manifest)) ?? [];
+        var saved = ReadCache(Path.Combine(directory, Manifest), DesktopJson.Default.QueuedFileArray) ?? [];
         var ids = new HashSet<Guid>();
         var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in saved)
@@ -95,7 +96,7 @@ internal sealed class TransferQueue(string directory)
                 continue;
             }
 
-            var result = ReadCache<FileBaseline>(Files(entry).VerifiedPath);
+            var result = ReadCache(Files(entry).VerifiedPath, DesktopJson.Default.FileBaseline);
             if (result is not { IsDirectory: false, LocalHash.Length: 64, RemoteVersion.Length: > 0 } || result == previous ||
                 job.Action != SyncAction.Download && result.LocalHash != job.Local?.Hash ||
                 job.Action != SyncAction.Upload && result.RemoteVersion != job.Remote?.Version)
@@ -110,7 +111,7 @@ internal sealed class TransferQueue(string directory)
         return changed;
     }
 
-    internal static T? ReadCache<T>(string path) where T : class
+    internal static T? ReadCache<T>(string path, JsonTypeInfo<T> typeInfo) where T : class
     {
         var kind = MacFile.Inspect(path);
         if (kind == null)
@@ -127,7 +128,7 @@ internal sealed class TransferQueue(string directory)
         {
             try
             {
-                return JsonSerializer.Deserialize<T>(input);
+                return JsonSerializer.Deserialize(input, typeInfo);
             }
             catch (JsonException ex)
             {
@@ -196,7 +197,7 @@ internal sealed class TransferQueue(string directory)
     {
         if (!entries.SequenceEqual(next))
         {
-            FolderPairStore.WriteJson(Path.Combine(directory, Manifest), next);
+            FolderPairStore.WriteJson(Path.Combine(directory, Manifest), next, DesktopJson.Default.QueuedFileArray);
             var keep = next.Select(entry => entry.Id).ToHashSet();
             foreach (var entry in entries.Where(entry => !keep.Contains(entry.Id)))
             {
@@ -232,12 +233,12 @@ internal sealed class TransferFiles(string prefix)
     internal string VerifiedPath { get { return prefix + ".verified"; } }
     private string ReceiptsPath { get { return prefix + ".receipts"; } }
 
-    private sealed record Receipt(int NextPart, string? Tag, bool Merged);
+    internal sealed record Receipt(int NextPart, string? Tag, bool Merged);
 
     internal void StartUpload(JsonElement ticket)
     {
         File.Delete(ReceiptsPath);
-        FolderPairStore.WriteJson(UploadPath, ticket);
+        FolderPairStore.WriteJson(UploadPath, ticket, DesktopJson.Default.JsonElement);
     }
 
     internal void ConfirmPart(int nextPart, string? tag, bool merged = false)
@@ -251,7 +252,7 @@ internal sealed class TransferFiles(string prefix)
 
         using (var output = new FileStream(ReceiptsPath, options))
         {
-            JsonSerializer.Serialize(output, new Receipt(nextPart, tag, merged));
+            JsonSerializer.Serialize(output, new Receipt(nextPart, tag, merged), DesktopJson.Default.Receipt);
             output.WriteByte((byte)'\n');
             output.Flush(true);
         }
@@ -259,7 +260,7 @@ internal sealed class TransferFiles(string prefix)
 
     internal UploadCheckpoint? ReadUpload()
     {
-        var ticket = TransferQueue.ReadCache<JsonDocument>(UploadPath);
+        var ticket = TransferQueue.ReadCache(UploadPath, DesktopJson.Default.JsonDocument);
         if (ticket == null)
         {
             return null;
@@ -302,7 +303,7 @@ internal sealed class TransferFiles(string prefix)
             Receipt? receipt;
             try
             {
-                receipt = JsonSerializer.Deserialize<Receipt>(journal.AsSpan(position, end - position));
+                receipt = JsonSerializer.Deserialize(journal.AsSpan(position, end - position), DesktopJson.Default.Receipt);
             }
             catch (JsonException ex)
             {

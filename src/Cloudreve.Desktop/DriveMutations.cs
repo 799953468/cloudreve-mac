@@ -20,22 +20,26 @@ internal sealed partial class DriveClient
 
     internal async Task CreateFolderAsync(string parent, string name, CancellationToken cancel)
     {
-        await JsonAsync(HttpMethod.Post, "file/create", new { uri = ChildUri(parent, name), type = "folder", err_on_conflict = true }, cancel);
+        var request = new CreateFileRequest(ChildUri(parent, name), "folder");
+        await JsonAsync(HttpMethod.Post, "file/create", request, DriveApiJson.Default.CreateFileRequest, cancel);
     }
 
     internal async Task RenameAsync(DriveEntry file, string name, CancellationToken cancel)
     {
         _ = ChildUri(file.Uri, name);
-        await JsonAsync(HttpMethod.Post, "file/rename", new { uri = file.Uri, new_name = name }, cancel);
+        var request = new RenameFileRequest(file.Uri, name);
+        await JsonAsync(HttpMethod.Post, "file/rename", request, DriveApiJson.Default.RenameFileRequest, cancel);
     }
 
     internal async Task MoveAsync(DriveEntry file, string directory, CancellationToken cancel)
     {
-        await JsonAsync(HttpMethod.Post, "file/move", new { uris = new[] { file.Uri }, dst = directory, copy = false }, cancel);
+        var request = new MoveFilesRequest([file.Uri], directory);
+        await JsonAsync(HttpMethod.Post, "file/move", request, DriveApiJson.Default.MoveFilesRequest, cancel);
     }
 
     internal async Task TrashAsync(DriveEntry file, CancellationToken cancel)
     {
-        await JsonAsync(HttpMethod.Delete, "file", new { uris = new[] { file.Uri }, skip_soft_delete = false }, cancel);
+        var request = new TrashFilesRequest([file.Uri]);
+        await JsonAsync(HttpMethod.Delete, "file", request, DriveApiJson.Default.TrashFilesRequest, cancel);
     }
 }

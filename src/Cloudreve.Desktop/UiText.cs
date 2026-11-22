@@ -31,7 +31,7 @@ internal static class UiText
         using (var stream = typeof(UiText).Assembly.GetManifestResourceStream("Cloudreve.Desktop.English.json")
                             ?? throw new InvalidOperationException("Missing English UI resource."))
         {
-            return JsonSerializer.Deserialize<Dictionary<string, string>>(stream) ?? throw new InvalidDataException("Invalid English UI resource.");
+            return JsonSerializer.Deserialize(stream, DesktopJson.Default.DictionaryStringString) ?? throw new InvalidDataException("Invalid English UI resource.");
         }
     }
 

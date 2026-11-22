@@ -23,22 +23,15 @@ internal sealed partial class DriveClient
             long size = input.Length;
             if (size == 0 && previous == null)
             {
-                await JsonAsync(HttpMethod.Post, "file/create", new { uri = target, type = "file", err_on_conflict = true }, cancel);
+                var create = new CreateFileRequest(target, "file");
+                await JsonAsync(HttpMethod.Post, "file/create", create, DriveApiJson.Default.CreateFileRequest, cancel);
                 return;
             }
 
-            var parameters = new Dictionary<string, object>
-            {
-                ["uri"] = target, ["size"] = size, ["policy_id"] = "", ["encryption_supported"] = new[] { UploadCipher.Algorithm },
-                ["last_modified"] = new DateTimeOffset(File.GetLastWriteTimeUtc(path)).ToUnixTimeMilliseconds()
-            };
-            if (previous != null)
-            {
-                parameters.Add("entity_type", "version");
-                parameters.Add("previous", previous.Version!);
-            }
-
-            var ticket = saved?.Ticket ?? await JsonAsync(HttpMethod.Put, "file/upload", parameters, cancel);
+            var request = new CreateUploadRequest(target, size, PolicyId: "", EncryptionSupported: [UploadCipher.Algorithm],
+                LastModified: new DateTimeOffset(File.GetLastWriteTimeUtc(path)).ToUnixTimeMilliseconds(),
+                EntityType: previous == null ? null : "version", Previous: previous?.Version);
+            var ticket = saved?.Ticket ?? await JsonAsync(HttpMethod.Put, "file/upload", request, DriveApiJson.Default.CreateUploadRequest, cancel);
             string id = DesktopLogin.Required(ticket, "session_id");
             bool canResume = saved != null;
             try
@@ -103,7 +96,8 @@ internal sealed partial class DriveClient
                 return;
             }
 
-            await JsonAsync(HttpMethod.Delete, "file/upload", new { id, uri = target }, cancel);
+            var request = new CancelUploadRequest(id, target);
+            await JsonAsync(HttpMethod.Delete, "file/upload", request, DriveApiJson.Default.CancelUploadRequest, cancel);
         }
         catch (Exception ex) when (ex.Data["CloudreveCode"] is 404 or 40011 or 40044 || ex is HttpRequestException { StatusCode: HttpStatusCode.NotFound or HttpStatusCode.Gone })
         {
@@ -171,7 +165,7 @@ internal sealed partial class DriveClient
         {
             string secret = DesktopLogin.Required(ticket, "callback_secret");
             await JsonAsync(kind == "onedrive" ? HttpMethod.Post : HttpMethod.Get,
-                $"callback/{kind}/{Uri.EscapeDataString(id)}/{Uri.EscapeDataString(secret)}", null, cancel);
+                $"callback/{kind}/{Uri.EscapeDataString(id)}/{Uri.EscapeDataString(secret)}", cancel);
         }
     }
 
@@ -184,7 +178,7 @@ internal sealed partial class DriveClient
                        { Content = new FileSliceContent(input.SafeFileHandle, offset, length, cipher, activity) }, cancel))
             {
                 response.EnsureSuccessStatusCode();
-                DesktopLogin.Envelope(await response.Content.ReadFromJsonAsync<JsonElement>(cancel));
+                DesktopLogin.Envelope(await response.Content.ReadFromJsonAsync(DriveApiJson.Default.JsonElement, cancel));
             }
 
             return null;
@@ -250,11 +244,11 @@ internal sealed partial class DriveClient
                 }
                 else if (kind == "qiniu")
                 {
-                    return DesktopLogin.Required(await response.Content.ReadFromJsonAsync<JsonElement>(cancel), "etag");
+                    return DesktopLogin.Required(await response.Content.ReadFromJsonAsync(DriveApiJson.Default.JsonElement, cancel), "etag");
                 }
                 else if (kind is "local" or "remote" or "load_balance")
                 {
-                    DesktopLogin.Envelope(await response.Content.ReadFromJsonAsync<JsonElement>(cancel));
+                    DesktopLogin.Envelope(await response.Content.ReadFromJsonAsync(DriveApiJson.Default.JsonElement, cancel));
                 }
             }
         }
@@ -281,7 +275,8 @@ internal sealed partial class DriveClient
             if (kind == "qiniu")
             {
                 request.Headers.Authorization = new AuthenticationHeaderValue("UpToken", DesktopLogin.Required(ticket, "credential"));
-                request.Content = JsonContent.Create(new { parts = tags.Select((etag, index) => new { etag, partNumber = index + 1 }) });
+                var parts = tags.Select((etag, index) => new QiniuPart(etag, index + 1)).ToArray();
+                request.Content = JsonContent.Create(new QiniuCompleteRequest(parts), DriveApiJson.Default.QiniuCompleteRequest);
             }
             else
             {

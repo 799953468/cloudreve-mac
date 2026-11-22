@@ -34,7 +34,7 @@ internal sealed class DownloadPartial : IDisposable
 
     internal async Task RestoreAsync(long size, CancellationToken cancel)
     {
-        var state = TransferQueue.ReadCache<DownloadCheckpoint>(files.DownloadPath);
+        var state = TransferQueue.ReadCache(files.DownloadPath, DesktopJson.Default.DownloadCheckpoint);
         if (state != null && state.Length >= 0 && state.Length <= Stream.Length && state.Length <= size && state.Complete == (state.Length == size))
         {
             Stream.SetLength(state.Length);
@@ -82,7 +82,8 @@ internal sealed class DownloadPartial : IDisposable
         }
 
         Stream.Flush(true);
-        FolderPairStore.WriteJson(files.DownloadPath, new DownloadCheckpoint(length, Convert.ToHexString(Hash.GetCurrentHash()), complete));
+        var checkpoint = new DownloadCheckpoint(length, Convert.ToHexString(Hash.GetCurrentHash()), complete);
+        FolderPairStore.WriteJson(files.DownloadPath, checkpoint, DesktopJson.Default.DownloadCheckpoint);
         savedLength = length;
         Complete = complete;
     }

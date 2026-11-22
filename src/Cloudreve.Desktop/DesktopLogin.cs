@@ -38,7 +38,7 @@ internal sealed class DesktopLogin
         using (HttpResponseMessage response = await http.GetAsync(new Uri(site, "/api/v4/site/ping"), cancel))
         {
             response.EnsureSuccessStatusCode();
-            JsonElement data = Envelope(await response.Content.ReadFromJsonAsync<JsonElement>(cancel));
+            JsonElement data = Envelope(await response.Content.ReadFromJsonAsync(DriveApiJson.Default.JsonElement, cancel));
             string version = data.GetString() ?? "";
             if (version.EndsWith("-pro", StringComparison.Ordinal))
             {
@@ -95,7 +95,7 @@ internal sealed class DesktopLogin
         using (var response = await http.PostAsync(new Uri(site, "/api/v4/session/oauth/token"), form, cancel))
         {
             response.EnsureSuccessStatusCode();
-            var json = await response.Content.ReadFromJsonAsync<JsonElement>(cancel);
+            var json = await response.Content.ReadFromJsonAsync(DriveApiJson.Default.JsonElement, cancel);
             var now = DateTimeOffset.UtcNow;
             return new DriveSession(site.AbsoluteUri, Guid.NewGuid().ToString(), values["name"] ?? site.Host, root, values["user_id"] ?? "",
                 Required(json, "access_token"), Required(json, "refresh_token"), now.AddSeconds(json.GetProperty("expires_in").GetInt64()),

@@ -11,6 +11,24 @@ namespace Cloudreve.Sync.Tests;
 public sealed class DesktopLogTests
 {
     [Fact]
+    public void OlderPreferencesKeepDefaultsForMissingFields()
+    {
+        var root = Directory.CreateTempSubdirectory();
+        try
+        {
+            string directory = Cloudreve.Sync.MacFile.NormalizeSystemPath(root.FullName);
+            File.WriteAllText(Path.Combine(directory, "preferences.json"), """{"ConflictAlerts":false}""");
+            var settings = new DesktopPreferences(directory);
+            Assert.Null(settings.Load());
+            Assert.Equal(new DisplayPreferences(ConflictAlerts: false), settings.Current);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [Fact]
     public void PreferencesPersistAndChangeTheActiveLogThreshold()
     {
         var root = Directory.CreateTempSubdirectory();

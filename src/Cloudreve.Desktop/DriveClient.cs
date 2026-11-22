@@ -5,6 +5,7 @@ using System.Net.Http.Json;
 using System.Net.ServerSentEvents;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using Cloudreve.Sync;
 using Serilog;
 using Serilog.Events;
@@ -46,10 +47,11 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
             }
 
             // Once sent, finish token rotation even if directory navigation cancels its original caller.
-            using (var response = await api.PostAsJsonAsync(ApiUri("session/token/refresh"), new { refresh_token = session.RefreshToken }, CancellationToken.None))
+            var request = new RefreshTokenRequest(session.RefreshToken);
+            using (var response = await api.PostAsJsonAsync(ApiUri("session/token/refresh"), request, DriveApiJson.Default.RefreshTokenRequest, CancellationToken.None))
             {
                 response.EnsureSuccessStatusCode();
-                JsonElement data = DesktopLogin.Envelope(await response.Content.ReadFromJsonAsync<JsonElement>(CancellationToken.None));
+                JsonElement data = DesktopLogin.Envelope(await response.Content.ReadFromJsonAsync(DriveApiJson.Default.JsonElement, CancellationToken.None));
                 session = session with
                 {
                     AccessToken = DesktopLogin.Required(data, "access_token"), RefreshToken = DesktopLogin.Required(data, "refresh_token"),
@@ -88,24 +90,29 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
         }
     }
 
-    private async Task<JsonElement> JsonAsync(HttpMethod method, string path, object? body, CancellationToken cancel)
+    private Task<JsonElement> JsonAsync<T>(HttpMethod method, string path, T body, JsonTypeInfo<T> typeInfo, CancellationToken cancel)
+    {
+        return JsonAsync(method, path, cancel, () => JsonContent.Create(body, typeInfo));
+    }
+
+    private async Task<JsonElement> JsonAsync(HttpMethod method, string path, CancellationToken cancel, Func<JsonContent>? createContent = null)
     {
         using (var response = await SendAsync(() => new HttpRequestMessage(method, ApiUri(path))
-                   { Content = body == null ? null : JsonContent.Create(body) }, cancel))
+                   { Content = createContent?.Invoke() }, cancel))
         {
             response.EnsureSuccessStatusCode();
-            return DesktopLogin.Envelope(await response.Content.ReadFromJsonAsync<JsonElement>(cancel));
+            return DesktopLogin.Envelope(await response.Content.ReadFromJsonAsync(DriveApiJson.Default.JsonElement, cancel));
         }
     }
 
     internal async Task<string> UserIdAsync(CancellationToken cancel)
     {
-        return DesktopLogin.Required(await JsonAsync(HttpMethod.Get, "user/me", null, cancel), "id");
+        return DesktopLogin.Required(await JsonAsync(HttpMethod.Get, "user/me", cancel), "id");
     }
 
     internal async Task<(long Used, long Total)> CapacityAsync(CancellationToken cancel)
     {
-        var data = await JsonAsync(HttpMethod.Get, "user/capacity", null, cancel);
+        var data = await JsonAsync(HttpMethod.Get, "user/capacity", cancel);
         return (data.GetProperty("used").GetInt64(), data.GetProperty("total").GetInt64());
     }
 
@@ -148,7 +155,7 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
         long? expectedCount = null;
         while (requested.Add(continuation))
         {
-            JsonElement data = await JsonAsync(HttpMethod.Get, path + continuation, null, cancel);
+            JsonElement data = await JsonAsync(HttpMethod.Get, path + continuation, cancel);
             if (data.TryGetProperty("recursion_limit_reached", out var limited) && limited.ValueKind == JsonValueKind.True)
             {
                 throw new InvalidDataException(UiText.Get("目录列表不完整，请稍后重试。"));
@@ -223,7 +230,7 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
 
     internal async Task<string> FolderIdAsync(string uri, CancellationToken cancel)
     {
-        var data = await JsonAsync(HttpMethod.Get, "file/info?uri=" + Uri.EscapeDataString(uri), null, cancel);
+        var data = await JsonAsync(HttpMethod.Get, "file/info?uri=" + Uri.EscapeDataString(uri), cancel);
         if (data.GetProperty("type").GetInt32() != 1 || HasSyncExclusion(data) ||
             !PairInventory.SameUri(uri.TrimEnd('/'), DesktopLogin.Required(data, "path").TrimEnd('/')))
         {
@@ -235,7 +242,7 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
 
     internal async Task<DriveEntry> StatAsync(string uri, CancellationToken cancel)
     {
-        return ParseEntry(await JsonAsync(HttpMethod.Get, "file/info?uri=" + Uri.EscapeDataString(uri), null, cancel));
+        return ParseEntry(await JsonAsync(HttpMethod.Get, "file/info?uri=" + Uri.EscapeDataString(uri), cancel));
     }
 
     internal async Task DownloadAsync(DriveEntry file, string destination, CancellationToken cancel, SyncActivity? activity = null)
@@ -294,13 +301,9 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
 
     private async Task<Uri> DownloadUriAsync(DriveEntry file, CancellationToken cancel)
     {
-        var parameters = new Dictionary<string, object> { ["uris"] = new[] { file.Uri }, ["download"] = true };
-        if (!string.IsNullOrEmpty(file.Version))
-        {
-            parameters.Add("entity", file.Version);
-        }
-
-        var data = await JsonAsync(HttpMethod.Post, "file/url", parameters, cancel);
+        string? entity = string.IsNullOrEmpty(file.Version) ? null : file.Version;
+        var request = new DownloadUrlRequest([file.Uri], Download: true, Entity: entity);
+        var data = await JsonAsync(HttpMethod.Post, "file/url", request, DriveApiJson.Default.DownloadUrlRequest, cancel);
         var urls = data.GetProperty("urls");
         var site = new Uri(session.Site);
         if (urls.GetArrayLength() != 1 || !Uri.TryCreate(site, DesktopLogin.Required(urls[0], "url"), out var url) || url.UserInfo.Length > 0 ||

@@ -13,7 +13,7 @@ internal sealed class DesktopText(string key) : MarkupExtension
         using (var stream = typeof(DesktopText).Assembly.GetManifestResourceStream($"Cloudreve.Desktop.Windows.{locale}.json")
                             ?? throw new InvalidOperationException("Missing desktop translation: " + locale))
         {
-            return JsonSerializer.Deserialize<JsonElement>(stream);
+            return JsonSerializer.Deserialize(stream, DesktopJson.Default.JsonElement);
         }
     }
 
