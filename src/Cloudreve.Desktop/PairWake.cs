@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text.Json;
 using System.Threading.Channels;
 using Serilog;
 using Serilog.Events;
@@ -6,7 +8,11 @@ namespace Cloudreve.Desktop;
 
 internal sealed class PairWake(TimeSpan pollInterval)
 {
-    // Changes are hints, not a journal: one pending rescan covers any burst of events.
+    private const int MaxPaths = 1024;
+    private readonly object gate = new();
+    private readonly HashSet<string> pending = new(StringComparer.OrdinalIgnoreCase);
+    private bool full;
+    private long lastFull = Stopwatch.GetTimestamp();
     private readonly Channel<bool> signals = Channel.CreateBounded<bool>(1);
     private volatile bool localAvailable;
     private volatile bool remoteAvailable;
@@ -17,7 +23,49 @@ internal sealed class PairWake(TimeSpan pollInterval)
 
     internal void Signal()
     {
-        signals.Writer.TryWrite(true);
+        lock (gate)
+        {
+            full = true;
+            pending.Clear();
+            signals.Writer.TryWrite(true);
+        }
+    }
+
+    internal void SignalPaths(params IEnumerable<string?> paths)
+    {
+        lock (gate)
+        {
+            foreach (string? path in paths)
+            {
+                if (full)
+                {
+                    break;
+                }
+
+                if (!IsRelevant(path))
+                {
+                    continue;
+                }
+
+                if (!TransferQueue.IsSafeKey(path))
+                {
+                    full = true;
+                    break;
+                }
+
+                pending.Add(path!.Normalize());
+                if (pending.Count > MaxPaths)
+                {
+                    full = true;
+                    break;
+                }
+            }
+
+            if (full || pending.Count != 0)
+            {
+                signals.Writer.TryWrite(true);
+            }
+        }
     }
 
     internal void SetRemoteAvailable(bool available)
@@ -25,23 +73,45 @@ internal sealed class PairWake(TimeSpan pollInterval)
         remoteAvailable = available;
     }
 
-    internal async Task WaitForNextScanAsync(bool retry, CancellationToken cancel)
+    internal async Task<PairScanScope?> WaitForNextScanAsync(bool retry, CancellationToken cancel)
     {
         if (retry)
         {
             // Notifications during a failed pass must not bypass the retry delay.
             await Task.Delay(pollInterval, cancel);
-            signals.Reader.TryRead(out _);
-            return;
+            return TakeScope(forceFull: true);
         }
 
         while (true)
         {
             // Recheck both watchers on short ticks without walking either tree.
-            if (await WaitAsync(pollInterval, cancel) || !localAvailable || !remoteAvailable)
+            bool signaled = await WaitAsync(pollInterval, cancel);
+            bool poll = (!localAvailable || !remoteAvailable) && Stopwatch.GetElapsedTime(lastFull) >= pollInterval;
+            if (signaled || poll)
             {
-                return;
+                return TakeScope(poll);
             }
+        }
+    }
+
+    private PairScanScope? TakeScope(bool forceFull)
+    {
+        lock (gate)
+        {
+            signals.Reader.TryRead(out _);
+            PairScanScope? scope = null;
+            if (forceFull || full)
+            {
+                lastFull = Stopwatch.GetTimestamp();
+            }
+            else
+            {
+                scope = new PairScanScope(pending);
+            }
+
+            pending.Clear();
+            full = false;
+            return scope;
         }
     }
 
@@ -80,10 +150,7 @@ internal sealed class PairWake(TimeSpan pollInterval)
             watcher.Deleted += OnLocalChange;
             watcher.Renamed += (_, change) =>
             {
-                if (IsRelevant(change.OldName) || IsRelevant(change.Name))
-                {
-                    Signal();
-                }
+                SignalPaths(change.OldName, change.Name);
             };
             watcher.Error += (_, error) =>
             {
@@ -109,10 +176,7 @@ internal sealed class PairWake(TimeSpan pollInterval)
 
     private void OnLocalChange(object sender, FileSystemEventArgs change)
     {
-        if (IsRelevant(change.Name))
-        {
-            Signal();
-        }
+        SignalPaths(change.Name);
     }
 
     internal static bool IsRelevant(string? relativePath)
@@ -126,9 +190,10 @@ internal sealed class PairWake(TimeSpan pollInterval)
         bool? connected = null;
         try
         {
-            await client.WatchAsync(root, message =>
+            await client.WatchAsync(root, (message, data) =>
             {
                 bool wasDisconnected = connected == false;
+                bool firstConnection = connected == null;
                 bool online = message is "subscribed" or "resumed" or "connected" or "event";
                 if (!online && message != "disconnected")
                 {
@@ -147,9 +212,13 @@ internal sealed class PairWake(TimeSpan pollInterval)
                     }
                 }
 
-                if (message is "event" or "resumed" || online && wasDisconnected)
+                if (message == "resumed" || online && (wasDisconnected || firstConnection))
                 {
                     Signal();
+                }
+                else if (message == "event")
+                {
+                    SignalRemoteChanges(data);
                 }
             }, cancel, logger);
         }
@@ -162,6 +231,56 @@ internal sealed class PairWake(TimeSpan pollInterval)
             SetRemoteAvailable(false);
             connectionChanged?.Invoke(false);
             logger.ForContext("WillRetry", false).WriteFailure(LogEventLevel.Warning, "Watch remote folder pair", ex);
+        }
+    }
+
+    internal void SignalRemoteChanges(string data)
+    {
+        var paths = new List<string?>();
+        try
+        {
+            using (var json = JsonDocument.Parse(data))
+            {
+                if (json.RootElement.ValueKind != JsonValueKind.Array || json.RootElement.GetArrayLength() > MaxPaths)
+                {
+                    Signal();
+                    return;
+                }
+
+                foreach (var item in json.RootElement.EnumerateArray())
+                {
+                    string? type = Field(item, "type");
+                    if (type is not ("create" or "modify" or "delete" or "rename"))
+                    {
+                        Signal();
+                        return;
+                    }
+
+                    paths.Add(RelativePath(Field(item, "from")));
+                    if (type == "rename")
+                    {
+                        paths.Add(RelativePath(Field(item, "to")));
+                    }
+                }
+            }
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            Signal();
+            return;
+        }
+
+        SignalPaths(paths);
+
+        static string? Field(JsonElement item, string name)
+        {
+            return item.ValueKind == JsonValueKind.Object && item.TryGetProperty(name, out var field) &&
+                field.ValueKind == JsonValueKind.String ? field.GetString() : null;
+        }
+
+        static string? RelativePath(string? path)
+        {
+            return path?.StartsWith('/') == true ? path[1..] : path;
         }
     }
 }

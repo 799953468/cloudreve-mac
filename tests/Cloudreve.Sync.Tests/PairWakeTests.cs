@@ -32,7 +32,17 @@ public sealed class PairWakeTests
                     wake.SetRemoteAvailable(false);
                 }
 
-                await next;
+                var scope = await next;
+                if (changed)
+                {
+                    Assert.NotNull(scope);
+                    Assert.True(scope.Covers("changed"));
+                    Assert.False(scope.Covers("unrelated"));
+                }
+                else
+                {
+                    Assert.Null(scope);
+                }
             }
         }
         finally
@@ -60,6 +70,38 @@ public sealed class PairWakeTests
         {
             root.Delete(true);
         }
+    }
+
+    [Fact]
+    public async Task CoalescesLocalAndRemoteRenamePathsAcrossBatches()
+    {
+        var wake = new PairWake();
+        wake.SignalRemoteChanges("""[{"type":"rename","from":"/old/a","to":"/new/a"},{"type":"modify","from":"/café"}]""");
+        wake.SignalPaths("local/edit", ".DS_Store");
+        var first = await wake.WaitForNextScanAsync(false, TestContext.Current.CancellationToken);
+        Assert.NotNull(first);
+        Assert.True(first.Covers("old/a") && first.Covers("new/a") && first.Covers("local/edit") && first.Covers("café"));
+        Assert.False(first.Covers("old/b") || first.Covers(".DS_Store"));
+        wake.SignalPaths("later");
+        var next = await wake.WaitForNextScanAsync(false, TestContext.Current.CancellationToken);
+        Assert.NotNull(next);
+        Assert.True(next.Covers("later"));
+        Assert.False(next.Covers("local/edit"));
+    }
+
+    [Theory]
+    [InlineData("[{}]")]
+    [InlineData("bad json")]
+    [InlineData("""[{"type":"rename","from":"/old"}]""")]
+    [InlineData("""[{"type":"modify","from":"/../outside"}]""")]
+    [InlineData("""[{"type":"modify","from":"/"}]""")]
+    public async Task InvalidRemoteBatchRequestsFullScan(string data)
+    {
+        var wake = new PairWake();
+        wake.SignalPaths("first");
+        wake.SignalRemoteChanges(data);
+        wake.SignalPaths("last");
+        Assert.Null(await wake.WaitForNextScanAsync(false, TestContext.Current.CancellationToken));
     }
 
     [Fact]

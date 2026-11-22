@@ -62,7 +62,9 @@ Click the Cloudreve menu bar icon to see which drives are scanning. Each drive s
 
 After a successful pass, a drive with working local and cloud notifications waits for a change without periodically rescanning. If either watcher is unavailable, it polls after 30 seconds instead. A failed pass waits 30 seconds before retrying, even if more notifications arrive.
 
-At startup and during routine sync, the app checks local files and lists remote folders in parallel, reading each folder's pages in order. It waits for complete scans on both sides and rechecks the paired root before transferring or deleting anything.
+At startup the app scans the paired folders in full. During routine sync it groups local and cloud notifications by path. Editing a file checks that file and lists its parent directories. A directory notification covers its subtree, and a rename checks both the old and new paths. The app rechecks both paired roots before applying changes.
+
+A lost notification, a change to ignore rules, or an uncertain move triggers a full scan. For example, when a tracked file disappears and the batch contains no matching destination, the app checks the rest of the pair before propagating the deletion. At Debug log level, the scan summary includes `ScanScope` (`Paths` or `Full`).
 
 Local scans, remote scans, and transfers each start with two concurrent operations per drive and can grow to six while work is waiting. Rate limits, service-unavailable responses, or request timeouts stop the current pass and halve the affected limit, down to one. The next pass scans again. Folder changes, moves, deletions, and chunks within a single upload stay sequential.
 

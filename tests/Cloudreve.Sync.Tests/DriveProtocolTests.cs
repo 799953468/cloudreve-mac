@@ -397,11 +397,12 @@ public sealed class DriveProtocolTests
         {
             var seen = new List<string>();
             var drive = new DriveClient(http, http, Session(), _ => { });
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => drive.WatchAsync(Session().Root, signal =>
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => drive.WatchAsync(Session().Root, (signal, data) =>
             {
                 seen.Add(signal);
                 if (signal == "event")
                 {
+                    Assert.Equal("[{}]", data);
                     cancel.Cancel();
                 }
             }, cancel.Token));

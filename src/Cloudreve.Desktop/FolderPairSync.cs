@@ -18,6 +18,7 @@ internal sealed class PairScanAttempt
 {
     private readonly Stopwatch timer = Stopwatch.StartNew();
     internal string Stage { get; set; } = "Prepare";
+    internal PairScanScope? Scope { get; set; }
     internal long ElapsedMs { get { return timer.ElapsedMilliseconds; } }
 }
 
@@ -27,13 +28,14 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
     private readonly AdaptiveWorkQueue remoteScan = new();
     private readonly AdaptiveWorkQueue transfers = new();
 
-    internal async Task<PairSyncResult> RunAsync(CancellationToken cancel, PairScanAttempt? attempt = null)
+    internal async Task<PairSyncResult> RunAsync(CancellationToken cancel, PairScanAttempt? attempt = null, PairScanScope? scope = null)
     {
         attempt ??= new PairScanAttempt();
         using (store.Lock(pair))
         {
             TransferQueue queue;
             Dictionary<string, FileBaseline> baseline;
+            Dictionary<string, FileBaseline>? outsideScope = null;
             PairIgnoreRules rules;
             PairInventory local, remote;
             activity?.SetScan(ScanPhase.Local);
@@ -56,15 +58,44 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                     store.SaveBaseline(pair, baseline);
                 }
 
-                attempt.Stage = "ScanLocal";
-                local = await PairInventory.ReadLocalAsync(pair, rules, baseline, localScan, cancel,
-                    activity == null ? null : count => activity.SetScan(ScanPhase.Local, count));
-                activity?.SetScan(ScanPhase.Remote);
-                attempt.Stage = "VerifyRemoteRoot";
-                await VerifyRemoteRootAsync(cancel);
-                attempt.Stage = "ScanRemote";
-                remote = await PairInventory.ReadRemoteAsync(pair.Remote, "", drive, rules, remoteScan, cancel,
-                    activity == null ? null : count => activity.SetScan(ScanPhase.Remote, count));
+                if (scope != null && LegacyVolumeIds.NeedsUpgrade(baseline))
+                {
+                    scope = null;
+                }
+
+                while (true)
+                {
+                    attempt.Scope = scope;
+                    activity?.SetScan(ScanPhase.Local);
+                    attempt.Stage = "ScanLocal";
+                    local = await PairInventory.ReadLocalAsync(pair, rules, baseline, localScan, cancel,
+                        activity == null ? null : count => activity.SetScan(ScanPhase.Local, count), scope);
+                    activity?.SetScan(ScanPhase.Remote);
+                    attempt.Stage = "VerifyRemoteRoot";
+                    await VerifyRemoteRootAsync(cancel);
+                    attempt.Stage = "ScanRemote";
+                    remote = await PairInventory.ReadRemoteAsync(pair.Remote, "", drive, rules, remoteScan, cancel,
+                        activity == null ? null : count => activity.SetScan(ScanPhase.Remote, count), scope);
+                    if (scope == null || !scope.NeedsFullInventory(baseline, local, remote))
+                    {
+                        break;
+                    }
+
+                    scope = null;
+                }
+
+                if (scope != null)
+                {
+                    // Reconciliation may interpret any absent baseline key as a deletion.
+                    // Give it only the keys covered by both inventories.
+                    outsideScope = baseline;
+                    baseline = baseline.Where(entry => scope.Visits(entry.Key)).ToDictionary();
+                    foreach (string key in baseline.Keys)
+                    {
+                        outsideScope.Remove(key);
+                    }
+                }
+
                 attempt.Stage = "VerifyRoots";
                 await VerifyRemoteRootAsync(cancel);
                 FolderPairStore.Verify(pair);
@@ -202,7 +233,8 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                 }
 
                 attempt.Stage = "TransferFiles";
-                var work = queue.Reconcile(pending, deferred.Count == 0 ? null : key => BlockedPath(deferred, key));
+                var work = queue.Reconcile(pending, scope == null && deferred.Count == 0 ? null :
+                    key => (scope != null && !scope.Covers(key)) || BlockedPath(deferred, key));
                 activity?.SetPending(queue.Entries);
                 await transfers.RunAsync(work, (entry, token) => TransferFileAsync(entry.File, queue.Files(entry), token), completed =>
                 {
@@ -272,7 +304,15 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
 
                 if (dirty || trashedDirectories.Count > 0)
                 {
-                    store.SaveBaseline(pair, baseline);
+                    if (outsideScope != null)
+                    {
+                        foreach (var (key, value) in baseline)
+                        {
+                            outsideScope.Add(key, value);
+                        }
+                    }
+
+                    store.SaveBaseline(pair, outsideScope ?? baseline);
                 }
 
                 queue.Complete(finished);

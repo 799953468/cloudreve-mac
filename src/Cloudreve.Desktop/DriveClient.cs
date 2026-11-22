@@ -389,7 +389,7 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
         }
     }
 
-    internal async Task WatchAsync(string directory, Action<string> notify, CancellationToken cancel, ILogger? logger = null)
+    internal async Task WatchAsync(string directory, Action<string, string> notify, CancellationToken cancel, ILogger? logger = null)
     {
         logger ??= Log.Logger;
         TimeSpan delay = TimeSpan.FromSeconds(1);
@@ -423,7 +423,7 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
                         };
                         logger.Warning("Remote event push unavailable: HTTP {StatusCode}, expected text/event-stream, received {ContentType}; folder polling remains enabled",
                             (int)response.StatusCode, received);
-                        notify("disconnected");
+                        notify("disconnected", "");
                         return;
                     }
 
@@ -434,7 +434,7 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
                         {
                             if (message.EventType is "subscribed" or "connected" or "resumed" or "event")
                             {
-                                notify(message.EventType);
+                                notify(message.EventType, message.Data);
                             }
 
                             if (message.EventType == "event")
@@ -476,7 +476,7 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
                 logger.Write(level, "Remote event stream disconnected: {Reason}; reconnecting in {RetryInSeconds} s", reason, delay.TotalSeconds);
             }
 
-            notify("disconnected");
+            notify("disconnected", "");
             await Task.Delay(delay, cancel);
             delay = TimeSpan.FromSeconds(Math.Min(30, delay.TotalSeconds * 2));
         }

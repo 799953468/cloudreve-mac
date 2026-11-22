@@ -31,10 +31,123 @@ public sealed class FolderPairSyncTests : IDisposable
         pair = store.Create(temp.CreateSubdirectory("local").FullName, Root, site.RootId);
     }
 
-    private Task<PairSyncResult> RunAsync(SyncActivity? activity = null, PairScanAttempt? attempt = null)
+    private Task<PairSyncResult> RunAsync(SyncActivity? activity = null, PairScanAttempt? attempt = null, PairScanScope? scope = null)
     {
         var restored = new FolderPairStore(Path.Combine(temp.FullName, "settings"), session);
-        return new FolderPairSync(restored, restored.Load()!, new DriveClient(http, http, session, _ => { }), activity).RunAsync(TestContext.Current.CancellationToken, attempt);
+        return new FolderPairSync(restored, restored.Load()!, new DriveClient(http, http, session, _ => { }), activity).RunAsync(TestContext.Current.CancellationToken, attempt, scope);
+    }
+
+    [Fact]
+    public async Task ScopedEditsVisitOnlyAffectedBranchesAndPreserveOtherBaselines()
+    {
+        foreach (string folder in new[] { "notes", "other" })
+        {
+            site.Folders.Add(Root + "/" + folder);
+            site.Put(Root + "/" + folder + "/doc", "original");
+        }
+
+        site.Put(Root + "/notes/sibling", "original");
+        await RunAsync();
+        var before = store.ReadBaseline(pair);
+        File.WriteAllText(Path.Combine(pair.Local, "notes/doc"), "local edit");
+        File.Delete(Path.Combine(pair.Local, "other/doc"));
+        site.Put(Root + "/notes/sibling", "cloud edit");
+        site.BeforeList = uri => Assert.NotEqual(Root + "/other", uri);
+        var attempt = new PairScanAttempt();
+        var scope = new PairScanScope(["notes/doc"]);
+        var result = await RunAsync(attempt: attempt, scope: scope);
+
+        Assert.Same(scope, attempt.Scope);
+        Assert.Equal(1, result.Uploaded);
+        Assert.Equal(0, result.Downloaded);
+        Assert.Empty(site.TrashRequests);
+        Assert.Equal("local edit", site.Files[Root + "/notes/doc"].Text);
+        Assert.Equal("original", File.ReadAllText(Path.Combine(pair.Local, "notes/sibling")));
+        var after = store.ReadBaseline(pair);
+        Assert.Equal(before["other/doc"], after["other/doc"]);
+        Assert.Equal(before["notes/sibling"], after["notes/sibling"]);
+        Assert.NotEqual(before["notes/doc"], after["notes/doc"]);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ScopedRenameUpdatesBothPathsAndPreservesFileIdentity(bool localRename)
+    {
+        site.Put(Root + "/old", "original");
+        site.Folders.Add(Root + "/to");
+        site.Folders.Add(Root + "/unrelated");
+        await RunAsync();
+        var before = store.ReadBaseline(pair)["old"];
+        string target = localRename ? "to/old" : "to/new";
+        if (localRename)
+        {
+            File.Move(Path.Combine(pair.Local, "old"), Path.Combine(pair.Local, target));
+        }
+        else
+        {
+            site.Move(Root + "/old", Root + "/" + target);
+        }
+
+        site.BeforeList = uri => Assert.NotEqual(Root + "/unrelated", uri);
+        var result = await RunAsync(scope: new PairScanScope(["old", target]));
+        Assert.Empty(result.Conflicts);
+        Assert.Empty(site.TrashRequests);
+        var after = store.ReadBaseline(pair);
+        Assert.False(after.ContainsKey("old"));
+        Assert.Equal(before.RemoteId, after[target].RemoteId);
+        Assert.Equal(before.LocalId, after[target].LocalId);
+    }
+
+    [Theory]
+    [InlineData("old")]
+    [InlineData("new")]
+    public async Task OneEndOfRenameRecoversOtherEndBeforeApplyingDeletion(string hint)
+    {
+        site.Put(Root + "/old", "original");
+        await RunAsync();
+        string id = site.Ids[Root + "/old"];
+        File.Move(Path.Combine(pair.Local, "old"), Path.Combine(pair.Local, "new"));
+        var attempt = new PairScanAttempt();
+        var result = await RunAsync(attempt: attempt, scope: new PairScanScope([hint]));
+        Assert.Null(attempt.Scope);
+        Assert.Empty(result.Conflicts);
+        Assert.Empty(site.TrashRequests);
+        Assert.Equal(id, site.Ids[Root + "/new"]);
+    }
+
+    [Fact]
+    public async Task NewDirectoryHintIncludesDescendantsAndSkipsSiblingTree()
+    {
+        site.Folders.Add(Root + "/unrelated");
+        await RunAsync();
+        site.BeforeList = uri => Assert.NotEqual(Root + "/unrelated", uri);
+        site.Folders.Add(Root + "/new");
+        site.Folders.Add(Root + "/new/nested");
+        site.Put(Root + "/new/nested/file", "new file");
+        var result = await RunAsync(scope: new PairScanScope(["new"]));
+        Assert.Equal(1, result.Downloaded);
+        Assert.Equal("new file", File.ReadAllText(Path.Combine(pair.Local, "new/nested/file")));
+    }
+
+    [Fact]
+    public async Task UnrelatedPathScanPreservesInterruptedTransferAndCheckpoint()
+    {
+        site.Put(Root + "/download", "abcdefgh");
+        site.DownloadLimit = 3;
+        await Assert.ThrowsAsync<InvalidDataException>(() => RunAsync());
+        string cache = store.TransferDirectory(pair);
+        var waiting = Assert.Single(TransferQueue.Open(cache).Entries);
+        string part = Assert.Single(Directory.GetFiles(cache, "*.part"));
+        File.WriteAllText(Path.Combine(pair.Local, "edit"), "upload");
+        site.DownloadLimit = null;
+        site.AcceptRanges = true;
+
+        Assert.Equal(1, (await RunAsync(scope: new PairScanScope(["edit"]))).Uploaded);
+        Assert.Equal(waiting.Id, Assert.Single(TransferQueue.Open(cache).Entries).Id);
+        Assert.Equal("abc", File.ReadAllText(part));
+        Assert.Equal(1, (await RunAsync(scope: new PairScanScope(["download"]))).Downloaded);
+        Assert.Equal(3L, site.Ranges[^1]);
     }
 
     [Fact]

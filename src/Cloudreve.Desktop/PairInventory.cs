@@ -98,11 +98,11 @@ internal sealed class PairInventory
     }
 
     internal static async Task<PairInventory> ReadLocalAsync(FolderPair pair, PairIgnoreRules rules, IReadOnlyDictionary<string, FileBaseline> baseline,
-        AdaptiveWorkQueue scan, CancellationToken cancel, Action<int>? reportCount = null)
+        AdaptiveWorkQueue scan, CancellationToken cancel, Action<int>? reportCount = null, PairScanScope? scope = null)
     {
         var inventory = new PairInventory();
         // Enumeration and cached metadata reads are synchronous even when no file needs hashing.
-        await scan.TraverseAsync(LocalChildren(pair.Local, cancel), (path, token) => Task.Run(() => ReadEntryAsync(path, token), token),
+        await scan.TraverseAsync(Children(pair.Local, cancel), (path, token) => Task.Run(() => ReadEntryAsync(path, token), token),
             (entry, enqueue) =>
             {
                 if (entry.Node == null)
@@ -120,6 +120,12 @@ internal sealed class PairInventory
                 reportCount?.Invoke(inventory.Nodes.Count);
             }, cancel);
         return inventory;
+
+        IEnumerable<string> Children(string directory, CancellationToken token)
+        {
+            var children = LocalChildren(directory, token);
+            return scope == null ? children : children.Where(path => scope.Visits(Path.GetRelativePath(pair.Local, path).Normalize()));
+        }
 
         async Task<LocalScanEntry> ReadEntryAsync(string path, CancellationToken token)
         {
@@ -140,7 +146,7 @@ internal sealed class PairInventory
             if (kind == NodeKind.Directory)
             {
                 var directory = new PairNode(key, kind, LocalId: MacFile.Identity(path));
-                return new LocalScanEntry(key, directory, LocalChildren(path, token).ToList());
+                return new LocalScanEntry(key, directory, Children(path, token).ToList());
             }
 
             return new LocalScanEntry(key, new PairNode(key, kind));
@@ -202,7 +208,7 @@ internal sealed class PairInventory
     }
 
     internal static async Task<PairInventory> ReadRemoteAsync(string rootUri, string rootKey, DriveClient drive, PairIgnoreRules rules,
-        AdaptiveWorkQueue scan, CancellationToken cancel, Action<int>? reportCount = null)
+        AdaptiveWorkQueue scan, CancellationToken cancel, Action<int>? reportCount = null, PairScanScope? scope = null)
     {
         var inventory = new PairInventory();
         var root = (Key: rootKey, Uri: rootUri);
@@ -219,6 +225,11 @@ internal sealed class PairInventory
                 }
 
                 string key = Path.Combine(parent.Key, entry.Name).Normalize();
+                if (scope != null && !scope.Visits(key))
+                {
+                    continue;
+                }
+
                 ValidateRemote(parent.Uri, entry);
                 ValidateKey(key);
                 if (rules.Excludes(key, entry.IsFolder))
