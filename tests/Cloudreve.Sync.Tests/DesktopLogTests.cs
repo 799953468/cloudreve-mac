@@ -61,6 +61,10 @@ public sealed class DesktopLogTests
                 log.WriteFailure(LogEventLevel.Warning, "Synchronize folder pair", unsupported);
                 var untrusted = new InvalidDataException("private-message") { Data = { [nameof(RemoteVersionFailure)] = "private-data" } };
                 log.WriteFailure(LogEventLevel.Warning, "Synchronize folder pair", untrusted);
+                var missingDirectory = Assert.Throws<IOException>(() => FolderPairStore.CheckDirectory(Path.Combine(root.FullName, "private-directory")));
+                log.WriteFailure(LogEventLevel.Warning, "Synchronize folder pair", missingDirectory);
+                var untrustedDirectory = new IOException { Data = { [nameof(DirectoryCheckFailure)] = "private-directory" } };
+                log.WriteFailure(LogEventLevel.Warning, "Synchronize folder pair", untrustedDirectory);
             }
 
             string contents = File.ReadAllText(Assert.Single(Directory.GetFiles(directory, "desktop-*.log")));
@@ -69,6 +73,7 @@ public sealed class DesktopLogTests
             Assert.Contains("(remote version: MissingVersion)", contents);
             Assert.Contains("(remote version: UriMismatch)", contents);
             Assert.Contains("(remote version: UnsupportedEntry)", contents);
+            Assert.Contains("\"DirectoryCheckFailure\":\"Missing\"", contents);
             Assert.DoesNotContain("example.invalid", contents);
             Assert.DoesNotContain("private", contents);
         }

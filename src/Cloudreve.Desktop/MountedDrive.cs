@@ -57,7 +57,8 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
             var engine = new FolderPairSync(PairStore, Pair, client, Activity);
             wake = new PairWake();
             watcher = wake.WatchLocal(Pair.Local);
-            workers = Task.WhenAll(capacity, ScanAsync(engine, wake, lifetime.Token),
+            ILogger logger = Log.Logger.ForContext("PairId", Pair.Marker);
+            workers = Task.WhenAll(capacity, ScanAsync(engine, wake, logger, lifetime.Token),
                 wake.WatchRemoteAsync(client, Pair.Remote, lifetime.Token, connected => { PushLost = !connected; }));
         }
     }
@@ -90,15 +91,20 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
         }
     }
 
-    private async Task ScanAsync(FolderPairSync engine, PairWake signal, CancellationToken cancel)
+    private async Task ScanAsync(FolderPairSync engine, PairWake signal, ILogger logger, CancellationToken cancel)
     {
         try
         {
             while (!cancel.IsCancellationRequested)
             {
+                bool retry = false;
+                var attempt = new PairScanAttempt();
                 try
                 {
-                    var result = await Task.Run(() => engine.RunAsync(cancel), cancel);
+                    var result = await Task.Run(() => engine.RunAsync(cancel, attempt), cancel);
+                    retry = result.DeferredDirectories > 0;
+                    logger.Debug("Folder pair scan finished in {ElapsedMs} ms: {Uploaded} uploaded, {Downloaded} downloaded, {Removed} removed, {Conflicts} conflicts, {DeferredDirectories} directories deferred",
+                        attempt.ElapsedMs, result.Uploaded, result.Downloaded, result.Removed, result.Conflicts.Count, result.DeferredDirectories);
                     if (Program.Preferences.Current.ConflictAlerts && result.Conflicts.Any(key => !conflicts.Contains(key)))
                     {
                         Notice?.Invoke(UiText.Get("同步冲突"));
@@ -108,11 +114,13 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
                 }
                 catch (Exception ex) when (!cancel.IsCancellationRequested)
                 {
+                    retry = true;
                     CheckExpiry(ex);
-                    Log.Logger.WriteFailure(LogEventLevel.Warning, "Synchronize folder pair", ex);
+                    logger.ForContext("Stage", attempt.Stage).ForContext("ElapsedMs", attempt.ElapsedMs)
+                        .WriteFailure(LogEventLevel.Warning, "Synchronize folder pair", ex);
                 }
 
-                await signal.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+                await signal.WaitForNextScanAsync(retry, cancel);
             }
         }
         catch (Exception) when (cancel.IsCancellationRequested)

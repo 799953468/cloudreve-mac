@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Cloudreve.Sync;
 
 namespace Cloudreve.Desktop;
@@ -11,7 +12,14 @@ internal enum ConflictChoice
     KeepBoth
 }
 
-internal sealed record PairSyncResult(int Uploaded, int Downloaded, int Removed, IReadOnlyList<string> Conflicts, IReadOnlyList<FileConflict> Choices);
+internal sealed record PairSyncResult(int Uploaded, int Downloaded, int Removed, IReadOnlyList<string> Conflicts, IReadOnlyList<FileConflict> Choices, int DeferredDirectories);
+
+internal sealed class PairScanAttempt
+{
+    private readonly Stopwatch timer = Stopwatch.StartNew();
+    internal string Stage { get; set; } = "Prepare";
+    internal long ElapsedMs { get { return timer.ElapsedMilliseconds; } }
+}
 
 internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair pair, DriveClient drive, SyncActivity? activity = null)
 {
@@ -19,8 +27,9 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
     private readonly AdaptiveWorkQueue remoteScan = new();
     private readonly AdaptiveWorkQueue transfers = new();
 
-    internal async Task<PairSyncResult> RunAsync(CancellationToken cancel)
+    internal async Task<PairSyncResult> RunAsync(CancellationToken cancel, PairScanAttempt? attempt = null)
     {
+        attempt ??= new PairScanAttempt();
         using (store.Lock(pair))
         {
             TransferQueue queue;
@@ -42,16 +51,21 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                 // A worker can finish before the coordinator gets to commit the batch baseline.
                 if (queue.RestoreVerified(baseline, rules))
                 {
+                    attempt.Stage = "RestoreVerifiedTransfers";
                     await VerifyRemoteRootAsync(cancel);
                     store.SaveBaseline(pair, baseline);
                 }
 
+                attempt.Stage = "ScanLocal";
                 local = await PairInventory.ReadLocalAsync(pair, rules, baseline, localScan, cancel,
                     activity == null ? null : count => activity.SetScan(ScanPhase.Local, count));
                 activity?.SetScan(ScanPhase.Remote);
+                attempt.Stage = "VerifyRemoteRoot";
                 await VerifyRemoteRootAsync(cancel);
+                attempt.Stage = "ScanRemote";
                 remote = await PairInventory.ReadRemoteAsync(pair.Remote, "", drive, rules, remoteScan, cancel,
                     activity == null ? null : count => activity.SetScan(ScanPhase.Remote, count));
+                attempt.Stage = "VerifyRoots";
                 await VerifyRemoteRootAsync(cancel);
                 FolderPairStore.Verify(pair);
             }
@@ -72,6 +86,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
             var conflicts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var choices = new List<FileConflict>();
             var blocked = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var deferred = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var directoryTrash = new List<PairNode>();
             var trashedDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var pending = new List<FileTransfer>();
@@ -80,8 +95,13 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
             bool dirty = false;
             try
             {
-                dirty = await SyncDirectoriesAsync(local, remote, baseline, rules, conflicts, blocked, directoryTrash, cancel);
+                dirty = LegacyVolumeIds.Upgrade(baseline, local, conflicts);
+                blocked.UnionWith(conflicts);
+                attempt.Stage = "SyncDirectories";
+                dirty |= await SyncDirectoriesAsync(local, remote, baseline, rules, conflicts, blocked, deferred, directoryTrash, cancel);
+                attempt.Stage = "ApplyFileMoves";
                 dirty |= await ApplyFileMovesAsync(local, remote, baseline, rules, conflicts, blocked, cancel);
+                attempt.Stage = "ReconcileFiles";
                 blocked.UnionWith(conflicts);
                 var keys = baseline.Keys.Concat(local.Nodes.Keys).Concat(remote.Nodes.Keys).Distinct(StringComparer.OrdinalIgnoreCase)
                     .Order(StringComparer.OrdinalIgnoreCase);
@@ -181,8 +201,9 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                     }
                 }
 
-                var work = queue.Reconcile(pending);
-                activity?.SetPending(work);
+                attempt.Stage = "TransferFiles";
+                var work = queue.Reconcile(pending, deferred.Count == 0 ? null : key => BlockedPath(deferred, key));
+                activity?.SetPending(queue.Entries);
                 await transfers.RunAsync(work, (entry, token) => TransferFileAsync(entry.File, queue.Files(entry), token), completed =>
                 {
                     var item = completed.Item;
@@ -207,8 +228,14 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                 }, cancel);
 
                 // These trees were blocked during the file pass. Trash only after rechecking their contents.
+                attempt.Stage = "TrashDirectories";
                 foreach (var directory in directoryTrash)
                 {
+                    if (BlockedPath(deferred, directory.Key))
+                    {
+                        continue;
+                    }
+
                     if (await TryTrashDirectoryAsync(directory, baseline, rules, cancel))
                     {
                         trashedDirectories.Add(directory.Key);
@@ -232,6 +259,9 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
             }
             finally
             {
+                // If checkpointing itself fails, it is the exception the caller will receive.
+                string previousStage = attempt.Stage;
+                attempt.Stage = "Checkpoint";
                 if (trashedDirectories.Count > 0)
                 {
                     foreach (string key in baseline.Keys.Where(key => BlockedPath(trashedDirectories, key)).ToArray())
@@ -247,9 +277,10 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
 
                 queue.Complete(finished);
                 activity?.SetPending(queue.Entries);
+                attempt.Stage = previousStage;
             }
 
-            return new PairSyncResult(uploaded, downloaded, removed, conflicts.ToArray(), choices);
+            return new PairSyncResult(uploaded, downloaded, removed, conflicts.ToArray(), choices, deferred.Count);
         }
     }
 

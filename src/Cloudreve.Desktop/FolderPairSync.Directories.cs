@@ -18,7 +18,7 @@ internal sealed partial class FolderPairSync
     }
 
     private async Task<bool> SyncDirectoriesAsync(PairInventory local, PairInventory remote, Dictionary<string, FileBaseline> baseline,
-        PairIgnoreRules rules, HashSet<string> conflicts, HashSet<string> blocked, List<PairNode> directoryTrash, CancellationToken cancel)
+        PairIgnoreRules rules, HashSet<string> conflicts, HashSet<string> blocked, HashSet<string> deferred, List<PairNode> directoryTrash, CancellationToken cancel)
     {
         ProtectMovedTrees(local, remote, baseline, conflicts, blocked);
         var keys = baseline.Where(entry => entry.Value.IsDirectory).Select(entry => entry.Key)
@@ -76,26 +76,31 @@ internal sealed partial class FolderPairSync
 
             if (previous != null && there == null)
             {
-                FolderPairStore.Verify(pair);
-                if (here != null && previous.LocalId != null && MacFile.Identity(path) == previous.LocalId)
+                if (previous.LocalId != null)
                 {
-                    FolderPairStore.CheckDirectory(path);
-                    if (!Directory.EnumerateFileSystemEntries(path).Any())
+                    await VerifyRemoteRootAsync(cancel);
+                    await ResolveRemoteAsync(key, null, false, cancel);
+                    if (DeferIfChanged(key))
                     {
-                        await VerifyRemoteRootAsync(cancel);
-                        await ResolveRemoteAsync(key, null, false, cancel);
-                        FolderPairStore.Verify(pair);
-                        FolderPairStore.CheckDirectory(path);
-                        if (MacFile.Identity(path) == previous.LocalId)
-                        {
-                            Directory.Delete(path, false);
-                            local.Nodes.Remove(key);
-                            dirty |= baseline.Remove(key);
-                            continue;
-                        }
+                        continue;
+                    }
+
+                    var removal = MacFile.ChangeDirectoryEntry(path, create: false);
+                    if (removal == DirectoryChangeResult.Applied)
+                    {
+                        local.Nodes.Remove(key);
+                        dirty |= baseline.Remove(key);
+                        continue;
+                    }
+
+                    if (removal == DirectoryChangeResult.PathChanged)
+                    {
+                        DeferIfChanged(key, operationRaced: true);
+                        continue;
                     }
                 }
 
+                // A non-empty local directory or one without a verified identity is never removed.
                 conflicts.Add(key);
                 blocked.Add(key);
                 continue;
@@ -110,13 +115,12 @@ internal sealed partial class FolderPairSync
                 string parent = relativeParent.Length == 0 ? pair.Remote : remote.Nodes[relativeParent].Remote!.Uri;
                 if (there == null)
                 {
-                    FolderPairStore.CheckDirectory(path);
-                    if (MacFile.Identity(path) != here!.LocalId)
+                    await ResolveRemoteAsync(key, null, false, cancel);
+                    if (DeferIfChanged(key))
                     {
-                        throw new IOException(UiText.Get("本地目录在同步期间已变化。"));
+                        continue;
                     }
 
-                    await ResolveRemoteAsync(key, null, false, cancel);
                     await drive.CreateFolderAsync(parent, name, cancel);
                     var directory = await drive.StatAsync(DriveClient.ChildUri(parent, name), cancel);
                     PairInventory.ValidateRemote(parent, directory);
@@ -135,10 +139,24 @@ internal sealed partial class FolderPairSync
                         throw new IOException(UiText.Get("云端目录在同步期间已变化。"));
                     }
 
-                    await RequireLocalAsync(key, null, cancel);
-                    EnsureLocalDirectory(key);
+                    if (DeferIfChanged(key))
+                    {
+                        continue;
+                    }
+
+                    if (MacFile.ChangeDirectoryEntry(path, create: true) == DirectoryChangeResult.PathChanged)
+                    {
+                        DeferIfChanged(key, operationRaced: true);
+                        continue;
+                    }
+
                     here = new PairNode(key, NodeKind.Directory, LocalId: MacFile.Identity(path));
                     local.Nodes.Add(key, here);
+                }
+
+                if (DeferIfChanged(key))
+                {
+                    continue;
                 }
             }
 
@@ -151,6 +169,48 @@ internal sealed partial class FolderPairSync
         }
 
         return dirty;
+
+        bool DeferIfChanged(string key, bool operationRaced = false)
+        {
+            string? changed = ChangedLocalDirectory(local, key);
+            if (changed == null && !operationRaced)
+            {
+                return false;
+            }
+
+            // Loss of the paired root is not a child race; it must abort the whole pass.
+            FolderPairStore.Verify(pair);
+            string subtree = changed ?? key;
+            deferred.Add(subtree);
+            blocked.Add(subtree);
+            return true;
+        }
+    }
+
+    private string? ChangedLocalDirectory(PairInventory local, string key)
+    {
+        FolderPairStore.Verify(pair);
+        string relative = "";
+        foreach (string name in key.Split('/'))
+        {
+            relative = Path.Combine(relative, name);
+            string path = Path.Combine(pair.Local, relative);
+            var kind = MacFile.Inspect(path);
+            if (local.Nodes.TryGetValue(relative, out var scanned))
+            {
+                if (kind != NodeKind.Directory || MacFile.Identity(path) != scanned.LocalId)
+                {
+                    return relative;
+                }
+            }
+            else if (kind != null || relative != key)
+            {
+                // Only the leaf may be absent: its parents were reconciled first.
+                return relative;
+            }
+        }
+
+        return null;
     }
 
     private static void ProtectMovedTrees(PairInventory local, PairInventory remote, Dictionary<string, FileBaseline> baseline,

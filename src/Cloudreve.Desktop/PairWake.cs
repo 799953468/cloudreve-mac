@@ -4,17 +4,34 @@ using Serilog.Events;
 
 namespace Cloudreve.Desktop;
 
-internal sealed class PairWake
+internal sealed class PairWake(TimeSpan pollInterval)
 {
     // Changes are hints, not a journal: one pending rescan covers any burst of events.
     private readonly Channel<bool> signals = Channel.CreateBounded<bool>(1);
+
+    internal PairWake() : this(TimeSpan.FromSeconds(30))
+    {
+    }
 
     internal void Signal()
     {
         signals.Writer.TryWrite(true);
     }
 
-    internal async Task WaitAsync(TimeSpan interval, CancellationToken cancel)
+    internal async Task WaitForNextScanAsync(bool retry, CancellationToken cancel)
+    {
+        if (retry)
+        {
+            // Notifications during a failed pass must not bypass the retry delay.
+            await Task.Delay(pollInterval, cancel);
+            signals.Reader.TryRead(out _);
+            return;
+        }
+
+        await WaitAsync(pollInterval, cancel);
+    }
+
+    internal async Task<bool> WaitAsync(TimeSpan interval, CancellationToken cancel)
     {
         using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancel))
         {
@@ -25,12 +42,13 @@ internal sealed class PairWake
             }
             catch (OperationCanceledException) when (!cancel.IsCancellationRequested)
             {
-                return;
+                return false;
             }
         }
 
         await Task.Delay(TimeSpan.FromMilliseconds(200), cancel);
         signals.Reader.TryRead(out _);
+        return true;
     }
 
     internal FileSystemWatcher? WatchLocal(string root)

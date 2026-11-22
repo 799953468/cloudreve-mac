@@ -137,13 +137,21 @@ internal sealed class TransferQueue(string directory)
         }
     }
 
-    internal QueuedFile[] Reconcile(List<FileTransfer> pending)
+    internal QueuedFile[] Reconcile(List<FileTransfer> pending, Func<string, bool>? isDeferred = null)
     {
         // Only fresh scan results may run. Preserve the position and checkpoints of exact matches.
         var remaining = pending.ToDictionary(file => file.Key);
         var next = new List<QueuedFile>(pending.Count);
         foreach (var entry in entries)
         {
+            if (isDeferred?.Invoke(entry.File.Key) == true)
+            {
+                // Keep its existing checkpoint, but do not run work from a stale directory scan.
+                next.Add(entry);
+                remaining.Remove(entry.File.Key);
+                continue;
+            }
+
             if (remaining.TryGetValue(entry.File.Key, out var file) && entry.File == file)
             {
                 next.Add(new QueuedFile(entry.Id, file));
@@ -173,7 +181,7 @@ internal sealed class TransferQueue(string directory)
             }
         }
 
-        return entries;
+        return isDeferred == null ? entries : entries.Where(entry => !isDeferred(entry.File.Key)).ToArray();
     }
 
     internal void Complete(HashSet<string> keys)

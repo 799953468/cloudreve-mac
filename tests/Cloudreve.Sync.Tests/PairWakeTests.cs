@@ -5,6 +5,22 @@ namespace Cloudreve.Sync.Tests;
 
 public sealed class PairWakeTests
 {
+    [Fact]
+    public async Task NotificationsDuringFailureDoNotBypassRetryOrQueueAnotherPass()
+    {
+        var wake = new PairWake(TimeSpan.FromMilliseconds(500));
+        using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+        {
+            wake.Signal();
+            var retry = wake.WaitForNextScanAsync(true, timeout.Token);
+            await Task.Delay(TimeSpan.FromMilliseconds(250), timeout.Token);
+            Assert.False(retry.IsCompleted);
+            wake.Signal();
+            await retry;
+            Assert.False(await wake.WaitAsync(TimeSpan.FromMilliseconds(25), timeout.Token));
+        }
+    }
+
     [Theory]
     [InlineData("notes/work.txt", true)]
     [InlineData("notes/.DS_Store", false)]

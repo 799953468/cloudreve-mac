@@ -1,4 +1,6 @@
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 
 namespace Cloudreve.Sync;
 
@@ -9,8 +11,59 @@ internal enum NodeKind
     Unsupported
 }
 
+internal enum DirectoryChangeResult
+{
+    Applied,
+    PathChanged,
+    NotEmpty
+}
+
 internal static partial class MacFile
 {
+    [LibraryImport("libSystem.B.dylib", EntryPoint = "open", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
+    private static partial SafeFileHandle OpenDirectory(string path, int flags);
+
+    [LibraryImport("libSystem.B.dylib", EntryPoint = "mkdirat", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
+    private static partial int MakeChildDirectory(SafeFileHandle parent, string name, ushort mode);
+
+    [LibraryImport("libSystem.B.dylib", EntryPoint = "unlinkat", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
+    private static partial int RemoveChildDirectory(SafeFileHandle parent, string name, int flags);
+
+    internal static DirectoryChangeResult ChangeDirectoryEntry(string path, bool create)
+    {
+        // Pin the parent without traversing symlinks. mkdirat never recreates missing parents
+        // or adopts an existing leaf; unlinkat with AT_REMOVEDIR only removes an empty directory.
+        const int openFlags = 0x00100000 | 0x01000000 | 0x20000000; // O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW_ANY
+        const int removeDirectory = 0x0080; // AT_REMOVEDIR
+        using (var parent = OpenDirectory(Path.GetDirectoryName(path)!, openFlags))
+        {
+            int result = -1;
+            if (!parent.IsInvalid)
+            {
+                string name = Path.GetFileName(path);
+                result = create ? MakeChildDirectory(parent, name, 0x1FF) : RemoveChildDirectory(parent, name, removeDirectory);
+            }
+
+            if (result == 0)
+            {
+                return DirectoryChangeResult.Applied;
+            }
+
+            int error = Marshal.GetLastPInvokeError();
+            if (error is 2 or 20 or 62 || create && error == 17) // ENOENT, ENOTDIR, ELOOP, EEXIST
+            {
+                return DirectoryChangeResult.PathChanged;
+            }
+
+            if (!create && error == 66) // ENOTEMPTY
+            {
+                return DirectoryChangeResult.NotEmpty;
+            }
+
+            throw new IOException(Marshal.GetPInvokeErrorMessage(error), error);
+        }
+    }
+
     internal static string NormalizeSystemPath(string path)
     {
         string full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
@@ -52,6 +105,42 @@ internal static partial class MacFile
         public ulong FileId;
     }
 
+    internal readonly record struct VolumeIdentity(ulong MountId, Guid Uuid);
+
+    [InlineArray(16)]
+    private struct UuidBytes
+    {
+        private byte first;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    private struct VolumeBuffer
+    {
+        public uint Length, ReturnedCommon, ReturnedVolume, ReturnedDirectory, ReturnedFile, ReturnedFork;
+        public uint VolumeLow, VolumeHigh;
+        public UuidBytes Uuid;
+    }
+
+    [LibraryImport("libSystem.B.dylib", EntryPoint = "getattrlist", StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int ReadVolume(string path, ref AttributeList attributes, out VolumeBuffer result, nuint size, nuint options);
+
+    internal static VolumeIdentity? ReadVolumeIdentity(string path)
+    {
+        const uint common = 0x80000000 | 0x00000004; // RETURNED_ATTRS | FSID
+        const uint uuid = 0x00040000; // ATTR_VOL_UUID (cannot be requested together with ATTR_CMN_FILEID)
+        var attributes = new AttributeList { Count = 5, Common = common, Volume = 0x80000000 | uuid };
+        nuint size = (nuint)Marshal.SizeOf<VolumeBuffer>();
+        if (ReadVolume(path, ref attributes, out var result, size, 1) != 0 || result.Length != size ||
+            result.ReturnedCommon != common || (result.ReturnedVolume & uuid) == 0)
+        {
+            return null;
+        }
+
+        var volumeId = new Guid(result.Uuid, bigEndian: true);
+        ulong mountId = ((ulong)result.VolumeHigh << 32) | result.VolumeLow;
+        return volumeId == Guid.Empty ? null : new VolumeIdentity(mountId, volumeId);
+    }
+
     internal readonly record struct ContentVersion(string LocalId, uint Generation);
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -80,12 +169,22 @@ internal static partial class MacFile
             return null;
         }
 
-        return new ContentVersion(FormatIdentity(result.VolumeHigh, result.VolumeLow, result.FileId, result.CreatedSeconds, result.CreatedNanoseconds), result.Generation);
+        string? id = FormatIdentity(path, result.VolumeHigh, result.VolumeLow, result.FileId, result.CreatedSeconds, result.CreatedNanoseconds);
+        return id == null ? null : new ContentVersion(id, result.Generation);
     }
 
-    private static string FormatIdentity(uint volumeHigh, uint volumeLow, ulong fileId, long createdSeconds, long createdNanoseconds)
+    private static string? FormatIdentity(string path, uint volumeHigh, uint volumeLow, ulong fileId, long createdSeconds, long createdNanoseconds)
     {
-        return $"{volumeHigh:X8}{volumeLow:X8}:{fileId:X16}:{createdSeconds:X16}:{createdNanoseconds:X8}";
+        ulong mountId = ((ulong)volumeHigh << 32) | volumeLow;
+        var volume = ReadVolumeIdentity(path);
+        if (volume.HasValue && volume.Value.MountId != mountId)
+        {
+            return null;
+        }
+
+        // FSID identifies a mount, not a disk. Only fall back to it on volumes without a UUID.
+        string volumeId = volume?.Uuid.ToString("N") ?? mountId.ToString("X16");
+        return $"{volumeId}:{fileId:X16}:{createdSeconds:X16}:{createdNanoseconds:X8}";
     }
 
     [LibraryImport("libSystem.B.dylib", EntryPoint = "getattrlist", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
@@ -100,7 +199,7 @@ internal static partial class MacFile
             return null;
         }
 
-        return FormatIdentity(result.VolumeHigh, result.VolumeLow, result.FileId, result.CreatedSeconds, result.CreatedNanoseconds);
+        return FormatIdentity(path, result.VolumeHigh, result.VolumeLow, result.FileId, result.CreatedSeconds, result.CreatedNanoseconds);
     }
 
     [LibraryImport("libSystem.B.dylib", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]

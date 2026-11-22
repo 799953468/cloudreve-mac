@@ -31,10 +31,10 @@ public sealed class FolderPairSyncTests : IDisposable
         pair = store.Create(temp.CreateSubdirectory("local").FullName, Root, site.RootId);
     }
 
-    private Task<PairSyncResult> RunAsync(SyncActivity? activity = null)
+    private Task<PairSyncResult> RunAsync(SyncActivity? activity = null, PairScanAttempt? attempt = null)
     {
         var restored = new FolderPairStore(Path.Combine(temp.FullName, "settings"), session);
-        return new FolderPairSync(restored, restored.Load()!, new DriveClient(http, http, session, _ => { }), activity).RunAsync(TestContext.Current.CancellationToken);
+        return new FolderPairSync(restored, restored.Load()!, new DriveClient(http, http, session, _ => { }), activity).RunAsync(TestContext.Current.CancellationToken, attempt);
     }
 
     [Fact]
@@ -71,6 +71,142 @@ public sealed class FolderPairSyncTests : IDisposable
         Assert.False(File.Exists(Path.Combine(pair.Local, "remote/b")));
         Assert.Contains("xyz", Directory.GetFiles(Path.Combine(pair.Local, ".cloudreve-recovery"), "b", SearchOption.AllDirectories).Select(File.ReadAllText));
         Assert.All(store.ReadBaseline(pair).Values, entry => Assert.True(entry.IsDirectory));
+    }
+
+    [Fact]
+    public async Task SyncsEditsAndRecognizesMovesAfterLegacyVolumeIdChanges()
+    {
+        string folder = Directory.CreateDirectory(Path.Combine(pair.Local, "notes")).FullName;
+        foreach (string name in new[] { "local", "remote", "before" })
+        {
+            File.WriteAllText(Path.Combine(folder, name), "first");
+        }
+
+        await RunAsync();
+        SetBaselineVolume("FFFFFFFFFFFFFFFF");
+        string movedVersion = site.Files[Root + "/notes/before"].Version;
+        File.WriteAllText(Path.Combine(folder, "local"), "local edit");
+        site.Put(Root + "/notes/remote", "cloud edit");
+        File.Move(Path.Combine(folder, "before"), Path.Combine(folder, "after"));
+
+        var changes = await RunAsync();
+        Assert.Empty(changes.Conflicts);
+        Assert.Equal(1, changes.Uploaded);
+        Assert.Equal(1, changes.Downloaded);
+        Assert.Equal("local edit", site.Files[Root + "/notes/local"].Text);
+        Assert.Equal("cloud edit", File.ReadAllText(Path.Combine(folder, "remote")));
+        Assert.Equal(movedVersion, site.Files[Root + "/notes/after"].Version);
+        Assert.Empty(site.TrashRequests);
+
+        var baseline = store.ReadBaseline(pair);
+        Assert.All(baseline, entry => Assert.Equal(MacFile.Identity(Path.Combine(pair.Local, entry.Key)), entry.Value.LocalId));
+        int transfers = site.Transfers;
+        Assert.Empty((await RunAsync()).Conflicts);
+        Assert.Equal(transfers, site.Transfers);
+    }
+
+    [Fact]
+    public async Task LegacyVolumeMigrationDoesNotAdoptAReplacementDirectory()
+    {
+        string folder = Directory.CreateDirectory(Path.Combine(pair.Local, "notes")).FullName;
+        File.WriteAllText(Path.Combine(folder, "keep"), "original");
+        File.WriteAllText(Path.Combine(pair.Local, "anchor"), "unchanged");
+        await RunAsync();
+        SetBaselineVolume("FFFFFFFFFFFFFFFF");
+
+        Directory.Move(folder, Path.Combine(temp.FullName, "original"));
+        Directory.CreateDirectory(folder);
+        var changes = await RunAsync();
+
+        Assert.Contains("notes", changes.Conflicts);
+        Assert.Equal("original", site.Files[Root + "/notes/keep"].Text);
+        Assert.Empty(site.TrashRequests);
+        Assert.False(File.Exists(Path.Combine(folder, "keep")));
+    }
+
+    [Fact]
+    public async Task KeepsBothEditsWhenMigratingAnOldBaseline()
+    {
+        string path = Path.Combine(pair.Local, "doc");
+        site.Put(Root + "/doc", "first");
+        await RunAsync();
+        SetBaselineVolume("FFFFFFFFFFFFFFFF");
+        File.WriteAllText(path, "local");
+        site.Put(Root + "/doc", "cloud");
+
+        Assert.Equal("doc", Assert.Single((await RunAsync()).Conflicts));
+        Assert.Equal("doc", Assert.Single((await RunAsync()).Conflicts));
+        Assert.Equal("local", File.ReadAllText(path));
+        Assert.Equal("cloud", site.Files[Root + "/doc"].Text);
+    }
+
+    [Fact]
+    public async Task DoesNotRebindAnotherPersistentVolumeEvenWhenObjectNumbersMatch()
+    {
+        string folder = Directory.CreateDirectory(Path.Combine(pair.Local, "notes")).FullName;
+        File.WriteAllText(Path.Combine(folder, "keep"), "original");
+        await RunAsync();
+        var volume = MacFile.ReadVolumeIdentity(folder);
+        Assert.SkipWhen(volume == null, "Volume has no persistent UUID.");
+        Assert.StartsWith(volume.Value.Uuid.ToString("N") + ":", store.ReadBaseline(pair)["notes"].LocalId);
+        SetBaselineVolume(Guid.NewGuid().ToString("N"));
+        File.Delete(Path.Combine(folder, "keep"));
+
+        Assert.Contains("notes", (await RunAsync()).Conflicts);
+        Assert.Equal("original", site.Files[Root + "/notes/keep"].Text);
+        Assert.Empty(site.TrashRequests);
+    }
+
+    [Fact]
+    public async Task UncertainLegacyMoveDoesNotTrashItsMissingParent()
+    {
+        string folder = Directory.CreateDirectory(Path.Combine(pair.Local, "notes")).FullName;
+        File.WriteAllText(Path.Combine(folder, "doc"), "original");
+        await RunAsync();
+        SetBaselineVolume("FFFFFFFFFFFFFFFF");
+        File.Move(Path.Combine(folder, "doc"), Path.Combine(pair.Local, "moved"));
+        Directory.Delete(folder);
+
+        var changes = await RunAsync();
+        Assert.Contains("notes", changes.Conflicts);
+        Assert.Contains("moved", changes.Conflicts);
+        Assert.Equal("original", site.Files[Root + "/notes/doc"].Text);
+        Assert.False(site.Files.ContainsKey(Root + "/moved"));
+        Assert.Empty(site.TrashRequests);
+    }
+
+    [Fact]
+    public void AmbiguousLegacyMountDoesNotReleaseMissingEntriesForDeletion()
+    {
+        const string oldVolume = "FFFFFFFFFFFFFFFF";
+        var local = new PairInventory();
+        var baseline = new Dictionary<string, FileBaseline>();
+        foreach (string key in new[] { "first", "second", "missing" })
+        {
+            string objectId = $":{baseline.Count + 1:X16}:0000000000000001:00000002";
+            baseline.Add(key, new FileBaseline("", "", oldVolume + objectId, IsDirectory: true));
+            if (key != "missing")
+            {
+                local.Nodes.Add(key, new PairNode(key, NodeKind.Directory, LocalId: Guid.NewGuid().ToString("N") + objectId));
+            }
+        }
+
+        var conflicts = new HashSet<string>();
+        Assert.False(LegacyVolumeIds.Upgrade(baseline, local, conflicts));
+        Assert.Equal(["first", "missing", "second"], conflicts.Order());
+        Assert.All(baseline.Values, entry => Assert.StartsWith(oldVolume + ":", entry.LocalId));
+    }
+
+    private void SetBaselineVolume(string volume)
+    {
+        var baseline = store.ReadBaseline(pair);
+        foreach (var (key, entry) in baseline.ToArray())
+        {
+            string id = Assert.IsType<string>(entry.LocalId);
+            baseline[key] = entry with { LocalId = volume + id[id.IndexOf(':')..] };
+        }
+
+        store.SaveBaseline(pair, baseline);
     }
 
     [Theory]
@@ -198,7 +334,9 @@ public sealed class FolderPairSyncTests : IDisposable
             }
         };
 
-        await Assert.ThrowsAsync<HttpRequestException>(() => RunAsync());
+        var attempt = new PairScanAttempt();
+        await Assert.ThrowsAsync<HttpRequestException>(() => RunAsync(attempt: attempt));
+        Assert.Equal("TransferFiles", attempt.Stage);
         Assert.Equal("a", Assert.Single(store.ReadBaseline(pair)).Key);
         Assert.Empty(Directory.GetFiles(pair.Local, "*.part"));
         site.BeforeStorageAsync = null;
@@ -470,6 +608,155 @@ public sealed class FolderPairSyncTests : IDisposable
         Assert.Equal(Root + "/one/two", Assert.Single(site.TrashRequests));
     }
 
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("file")]
+    [InlineData("link")]
+    [InlineData("replacement-directory")]
+    public async Task ChangedLocalDirectoryDoesNotPreventUploadingAnUnrelatedEdit(string change)
+    {
+        string note = Path.Combine(pair.Local, "note");
+        File.WriteAllText(note, "before");
+        await RunAsync();
+        File.WriteAllText(note, "after");
+        string tree = Directory.CreateDirectory(Path.Combine(pair.Local, "tree")).FullName;
+        File.WriteAllText(Path.Combine(tree, "child"), "original");
+        string moved = Path.Combine(temp.FullName, "moved");
+        site.BeforeList = _ =>
+        {
+            site.BeforeList = null;
+            Directory.Move(tree, moved);
+            switch (change)
+            {
+                case "file": File.WriteAllText(tree, "replacement"); break;
+                case "link": Directory.CreateSymbolicLink(tree, moved); break;
+                case "replacement-directory": Directory.CreateDirectory(tree); break;
+            }
+        };
+
+        var result = await RunAsync();
+        Assert.Equal(1, result.Uploaded);
+        Assert.Equal("after", site.Files[Root + "/note"].Text);
+        Assert.Equal(1, result.DeferredDirectories);
+        Assert.Empty(result.Conflicts);
+        Assert.DoesNotContain(Root + "/tree", site.Folders);
+        Assert.DoesNotContain("tree", store.ReadBaseline(pair).Keys);
+        Assert.Empty(site.TrashRequests);
+
+        if (change == "missing")
+        {
+            Directory.Move(moved, tree);
+            var retried = await RunAsync();
+            Assert.Equal(1, retried.Uploaded);
+            Assert.Equal(0, retried.DeferredDirectories);
+            Assert.Equal("original", site.Files[Root + "/tree/child"].Text);
+        }
+    }
+
+    [Fact]
+    public async Task ReplacementParentIsNotUsedToInstallCloudChildrenOrDeleteTheirSiblings()
+    {
+        string tree = Directory.CreateDirectory(Path.Combine(pair.Local, "tree")).FullName;
+        string original = Path.Combine(tree, "original");
+        File.WriteAllText(original, "keep");
+        string empty = Directory.CreateDirectory(Path.Combine(tree, "empty")).FullName;
+        await RunAsync();
+        File.Delete(original);
+        Directory.Delete(empty);
+        site.Folders.Add(Root + "/tree/new");
+        site.Put(Root + "/tree/new/child", "cloud");
+        site.Put(Root + "/unrelated", "download me");
+        string cache = store.TransferDirectory(pair);
+        var queue = TransferQueue.Open(cache);
+        var waiting = Assert.Single(queue.Reconcile([new FileTransfer("tree/new/child", SyncAction.Download, null, null, null)]));
+        string partial = queue.Files(waiting).PartPath;
+        File.WriteAllText(partial, "partial");
+        site.BeforeList = _ =>
+        {
+            site.BeforeList = null;
+            Directory.Move(tree, Path.Combine(temp.FullName, "moved"));
+            Directory.CreateDirectory(tree);
+        };
+
+        var result = await RunAsync();
+        Assert.Equal(1, result.Downloaded);
+        Assert.Equal(1, result.DeferredDirectories);
+        Assert.Equal("download me", File.ReadAllText(Path.Combine(pair.Local, "unrelated")));
+        Assert.Empty(Directory.GetFileSystemEntries(tree));
+        Assert.Empty(site.TrashRequests);
+        Assert.Equal(waiting, Assert.Single(TransferQueue.Open(cache).Entries));
+        Assert.Equal("partial", File.ReadAllText(partial));
+        Assert.Contains(Root + "/tree/empty", site.Folders);
+        Assert.Contains("tree/original", store.ReadBaseline(pair).Keys);
+        Assert.DoesNotContain("tree/new", store.ReadBaseline(pair).Keys);
+    }
+
+    [Fact]
+    public async Task DirectoryDisappearingDuringCloudDeletionRecheckDoesNotAbortOtherEdits()
+    {
+        string tree = Directory.CreateDirectory(Path.Combine(pair.Local, "tree")).FullName;
+        await RunAsync();
+        var known = store.ReadBaseline(pair)["tree"];
+        site.Folders.Remove(Root + "/tree");
+        site.Put(Root + "/note", "download me");
+        int listings = 0;
+        site.BeforeList = parent =>
+        {
+            if (parent == Root && ++listings == 2)
+            {
+                Directory.Delete(tree);
+            }
+        };
+
+        Assert.Equal(1, (await RunAsync()).Downloaded);
+        Assert.Equal(known, store.ReadBaseline(pair)["tree"]);
+        Assert.Empty(site.TrashRequests);
+        await RunAsync();
+        Assert.DoesNotContain("tree", store.ReadBaseline(pair).Keys);
+    }
+
+    [Fact]
+    public async Task LosingThePairedRootDuringDirectoryReconciliationStillAborts()
+    {
+        Directory.CreateDirectory(Path.Combine(pair.Local, "tree"));
+        int listings = 0;
+        site.BeforeList = parent =>
+        {
+            if (parent == Root && ++listings == 2)
+            {
+                Directory.Move(pair.Local, pair.Local + "-offline");
+            }
+        };
+
+        var attempt = new PairScanAttempt();
+        var error = await Assert.ThrowsAsync<IOException>(() => RunAsync(attempt: attempt));
+        Assert.Equal(DirectoryCheckFailure.Missing, error.Data[nameof(DirectoryCheckFailure)]);
+        Assert.Equal("SyncDirectories", attempt.Stage);
+        Assert.DoesNotContain(Root + "/tree", site.Folders);
+        Assert.Empty(site.TrashRequests);
+        Assert.Empty(store.ReadBaseline(pair));
+    }
+
+    [Fact]
+    public void DirectoryMutationsNeverFollowALinkOrRecreateAMissingParent()
+    {
+        string outside = temp.CreateSubdirectory("outside").FullName;
+        Directory.CreateDirectory(Path.Combine(outside, "keep"));
+        string link = Path.Combine(pair.Local, "link");
+        Directory.CreateSymbolicLink(link, outside);
+        Assert.Equal(DirectoryChangeResult.PathChanged, MacFile.ChangeDirectoryEntry(Path.Combine(link, "new"), create: true));
+        Assert.Equal(DirectoryChangeResult.PathChanged, MacFile.ChangeDirectoryEntry(Path.Combine(link, "keep"), create: false));
+        Assert.False(Directory.Exists(Path.Combine(outside, "new")));
+        Assert.True(Directory.Exists(Path.Combine(outside, "keep")));
+
+        string missing = Path.Combine(pair.Local, "missing");
+        Assert.Equal(DirectoryChangeResult.PathChanged, MacFile.ChangeDirectoryEntry(Path.Combine(missing, "new"), create: true));
+        Assert.False(Directory.Exists(missing));
+        Assert.Equal(DirectoryChangeResult.PathChanged, MacFile.ChangeDirectoryEntry(link, create: true));
+        Assert.Equal(DirectoryChangeResult.PathChanged, MacFile.ChangeDirectoryEntry(link, create: false));
+        Assert.NotNull(new DirectoryInfo(link).LinkTarget);
+    }
+
     [Fact]
     public async Task TrashesOnlyTheMissingTreeAndForgetsItsDescendantsAcrossRestart()
     {
@@ -739,7 +1026,9 @@ public sealed class FolderPairSyncTests : IDisposable
         await RunAsync();
         File.Delete(Path.Combine(pair.Local, "saved"));
         site.Incomplete = true;
-        await Assert.ThrowsAsync<InvalidDataException>(() => RunAsync());
+        var attempt = new PairScanAttempt();
+        await Assert.ThrowsAsync<InvalidDataException>(() => RunAsync(attempt: attempt));
+        Assert.Equal("ScanRemote", attempt.Stage);
         Assert.Single(site.Files);
         site.Incomplete = false;
         Directory.Move(pair.Local, pair.Local + "-unmounted");

@@ -7,6 +7,14 @@ namespace Cloudreve.Desktop;
 
 internal sealed record FolderPair(string Local, string Remote, Guid Marker, string RemoteId);
 
+internal enum DirectoryCheckFailure
+{
+    Missing,
+    FoundFile,
+    LinkOrSpecialEntry,
+    RootMarkerMismatch
+}
+
 internal sealed class FolderPairStore
 {
     private const string MarkerName = ".cloudreve-sync-root";
@@ -100,7 +108,10 @@ internal sealed class FolderPairStore
         string path = Path.Combine(pair.Local, MarkerName);
         if (MacFile.Inspect(path) != NodeKind.File || new FileInfo(path).Length > 128 || File.ReadAllText(path) != pair.Marker.ToString("N"))
         {
-            throw new IOException(UiText.Get("本地同步目录已移动、被替换或磁盘未挂载；未同步。"));
+            throw new IOException(UiText.Get("本地同步目录已移动、被替换或磁盘未挂载；未同步。"))
+            {
+                Data = { [nameof(DirectoryCheckFailure)] = DirectoryCheckFailure.RootMarkerMismatch }
+            };
         }
     }
 
@@ -214,9 +225,19 @@ internal sealed class FolderPairStore
     {
         for (var dir = new DirectoryInfo(path); dir != null; dir = dir.Parent)
         {
-            if (MacFile.Inspect(dir.FullName) != NodeKind.Directory)
+            var kind = MacFile.Inspect(dir.FullName);
+            if (kind != NodeKind.Directory)
             {
-                throw new IOException(UiText.Get("同步目录不存在，或路径包含链接。"));
+                var reason = kind switch
+                {
+                    null => DirectoryCheckFailure.Missing,
+                    NodeKind.File => DirectoryCheckFailure.FoundFile,
+                    _ => DirectoryCheckFailure.LinkOrSpecialEntry
+                };
+                throw new IOException(UiText.Get("同步目录不存在，或路径包含链接。"))
+                {
+                    Data = { [nameof(DirectoryCheckFailure)] = reason }
+                };
             }
         }
     }

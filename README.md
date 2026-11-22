@@ -70,6 +70,7 @@ Local scans, remote scans, and transfers each start with two concurrent operatio
 
 - **The browser doesn't return to the app.** Launch the built `Cloudreve.app` rather than using `dotnet run`. Start **Connect** again and keep that instance open until sign-in finishes.
 - **A transfer keeps failing.** Check the activity panel and `~/Library/Logs/Cloudreve/desktop-*.log`. File logging can be configured in **Settings > General**.
+- **A local directory changed since the scan.** If a directory recheck detects a change, the app defers that subtree and continues syncing unrelated edits. The debug scan summary counts these as `DeferredDirectories`, not conflicts. A new scan starts after a 30-second wait. A missing or replaced paired root still stops the scan; `DirectoryCheckFailure` in the warning describes a failed local directory or marker check without logging paths.
 - **Reporting a problem?** Don't share `drives.json` files or the `folder-pairs` transfer cache under `~/Library/Application Support/Cloudreve/`. The session files store access and refresh tokens in plaintext, not in Keychain. Other programs running as your macOS user can read them.
 
 ## Contributing
