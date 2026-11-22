@@ -216,7 +216,8 @@ internal sealed partial class ActivityWindow : Window
         };
         StatusIcon.Data = StreamGeometry.Parse(showFailure ? "M12 2 1 21h22z M11 8h2v7h-2z M11 17h2v2h-2z" :
             idle ? "M12 2a10 10 0 1 0 0 20a10 10 0 1 0 0-20 M10 17l-5-5 1.5-1.5 3.5 3.5 7-7 1.5 1.5z" : "M4 5v5h5L7 8a6 6 0 1 1-1 7H3a9 9 0 1 0 2-9z");
-        StatusIcon.Foreground = showFailure ? Brushes.IndianRed : idle ? Brushes.SeaGreen : Brushes.DodgerBlue;
+        StatusIcon.Classes.Set("failure", showFailure);
+        StatusIcon.Classes.Set("healthy", idle);
     }
 
     private Grid Row(MountedDrive drive, ActivityEntry entry, bool active, ActivityTransfer? transfer)
@@ -224,7 +225,7 @@ internal sealed partial class ActivityWindow : Window
         var row = new Grid { ColumnDefinitions = new ColumnDefinitions("32,*"), ColumnSpacing = 8, Margin = new Thickness(16, 12) };
         var file = new PathIcon
         {
-            Width = 22, Height = 26, Foreground = active ? Brushes.SteelBlue : Brushes.Gray,
+            Width = 22, Height = 26, Classes = { active ? "activityInk" : "mutedIcon" },
             Data = StreamGeometry.Parse("M4 1h10l6 6v16H4z M6 3v18h12V9h-6V3z")
         };
         row.Children.Add(file);

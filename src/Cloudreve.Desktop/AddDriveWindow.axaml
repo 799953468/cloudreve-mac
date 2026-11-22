@@ -2,14 +2,14 @@
         x:Class="Cloudreve.Desktop.AddDriveWindow" x:ClassModifier="internal" Title="{d:DesktopText addDrive.title}" Width="470" Height="630"
         CanResize="False" WindowStartupLocation="CenterScreen" Background="{DynamicResource HeaderFill}" Foreground="{DynamicResource Ink}">
   <Window.Styles><StyleInclude Source="/Styles/DesktopControls.axaml" /></Window.Styles>
-  <Grid>
+  <Grid RowDefinitions="*,Auto">
     <ScrollViewer HorizontalScrollBarVisibility="Disabled"><StackPanel Margin="48,24" VerticalAlignment="Center" Spacing="8">
-      <Image x:Name="Logo" Source="/Assets/cloudreve.png" Width="120" Height="120" Margin="0,0,0,24" />
-      <TextBlock x:Name="Heading" TextAlignment="Center" FontSize="24" FontWeight="Medium" TextWrapping="Wrap" />
+      <Image x:Name="Logo" Source="/Assets/cloudreve.png" Width="88" Height="88" Margin="0,0,0,16" />
+      <TextBlock x:Name="Heading" Classes="pageTitle" TextAlignment="Center" TextWrapping="Wrap" />
       <TextBlock x:Name="Hint" Classes="secondary" TextAlignment="Center" TextWrapping="Wrap" />
       <StackPanel x:Name="Form" Spacing="16" Margin="0,12,0,0">
         <TextBox x:Name="Endpoint" Classes="filled" Height="56" VerticalContentAlignment="Center" AutomationProperties.Name="{d:DesktopText addDrive.siteUrl}" />
-        <StackPanel x:Name="MountFields" Spacing="8" IsVisible="False">
+        <StackPanel x:Name="MountFields" Classes="reveal" Spacing="8" IsVisible="False">
           <Label Content="{d:DesktopText addDrive.localDriveName}" Target="{Binding #MountName}" Padding="0" />
           <TextBox x:Name="MountName" Classes="filled" />
           <Label Content="{d:DesktopText addDrive.localPath}" Target="{Binding #LocalPath}" Padding="0" />
@@ -19,8 +19,8 @@
         <Button x:Name="Back" Classes="tool" HorizontalAlignment="Stretch" Height="42" />
       </StackPanel>
     </StackPanel></ScrollViewer>
-    <Border x:Name="ErrorPanel" IsVisible="False" VerticalAlignment="Bottom" Background="{DynamicResource HeaderFill}" Padding="16,8">
-      <TextBlock x:Name="ErrorText" TextWrapping="Wrap" />
+    <Border Grid.Row="1" x:Name="ErrorPanel" IsVisible="False" Background="{DynamicResource DangerFill}" Padding="16,10">
+      <TextBlock x:Name="ErrorText" TextWrapping="Wrap" Foreground="{DynamicResource DangerInk}" AutomationProperties.LiveSetting="Polite" />
     </Border>
   </Grid>
 </Window>

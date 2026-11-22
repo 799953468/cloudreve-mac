@@ -131,7 +131,8 @@ internal sealed partial class SettingsWindow : Window
             title.Children.Add(new TextBlock { Text = name, FontSize = 16, FontWeight = FontWeight.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis });
             var status = new TextBlock
             {
-                FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Foreground = expired ? Brushes.IndianRed : lost ? Brushes.DarkOrange : Brushes.SeaGreen,
+                FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
+                Classes = { expired ? "failure" : lost ? "warning" : "healthy" },
                 Text = "● " + DesktopText.Get("settings.driveStatus." + (expired ? "credentialExpired" : lost ? "eventPushLost" : "active"))
             };
             Grid.SetColumn(status, 1);
@@ -269,6 +270,7 @@ internal sealed partial class SettingsWindow : Window
     {
         var prefs = Program.Preferences;
         GeneralPage.Children.Clear();
+        GeneralPage.Children.Add(new TextBlock { Classes = { "pageTitle" }, Text = DesktopText.Get("settings.general") });
         var launch = Group("launchSettings");
         AddLoginItemSetting(launch);
         Toggle(launch, "fastPopupLaunch", prefs.Current.FastPopup, value => prefs.Save(prefs.Current with { FastPopup = value }));

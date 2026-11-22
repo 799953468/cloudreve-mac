@@ -6,7 +6,7 @@
     <Style Selector="TextBlock.activitySection">
       <Setter Property="FontSize" Value="12" /><Setter Property="FontWeight" Value="SemiBold" />
       <Setter Property="Foreground" Value="{DynamicResource Muted}" /><Setter Property="LineHeight" Value="20" />
-      <Setter Property="Margin" Value="16,8,16,0" />
+      <Setter Property="Margin" Value="16,12,16,3" />
     </Style>
     <Style Selector="PathIcon.queueUpload">
       <Setter Property="Data" Value="M11 16V6.8L7.4 10.4 6 9l6-6 6 6-1.4 1.4L13 6.8V16z M4 16h2v3h12v-3h2v5H4z" />
@@ -82,9 +82,19 @@
           </StackPanel>
         </StackPanel>
         </ScrollViewer>
-        <StackPanel x:Name="Empty" VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="8"><PathIcon Width="48" Height="48" Data="{StaticResource FolderIcon}" Foreground="{DynamicResource DisabledInk}" /><TextBlock Classes="secondary" Text="{d:DesktopText popup.noActivity}" TextAlignment="Center" /></StackPanel>
+        <StackPanel x:Name="Empty" Classes="reveal" VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="12">
+          <Border Width="60" Height="60" CornerRadius="30" Background="{DynamicResource OptionSelectedFill}">
+            <PathIcon Width="28" Height="28" Data="{StaticResource FolderOutline}" Foreground="{DynamicResource Primary}" />
+          </Border>
+          <TextBlock Classes="secondary" Text="{d:DesktopText popup.noActivity}" TextAlignment="Center" />
+        </StackPanel>
       </Grid>
-      <Border Grid.Row="2" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource Divider}" Padding="16,8"><StackPanel Orientation="Horizontal" Spacing="10"><PathIcon x:Name="StatusIcon" Width="16" Height="16" /><TextBlock x:Name="Footer" Classes="secondary" FontSize="13" /></StackPanel></Border>
+      <Border Grid.Row="2" Background="{DynamicResource HeaderFill}" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource Divider}" Padding="16,9">
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <PathIcon x:Name="StatusIcon" Classes="activityInk" Width="16" Height="16" />
+          <TextBlock x:Name="Footer" FontSize="13" />
+        </StackPanel>
+      </Border>
     </Grid>
   </Border>
 </Window>

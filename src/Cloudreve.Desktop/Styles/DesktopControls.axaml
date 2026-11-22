@@ -1,5 +1,4 @@
 <Styles xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-  <!-- Mirrors ui/src/theme.ts and the Material action palette in cloudreve/desktop. -->
   <Styles.Resources>
     <ResourceDictionary>
       <StreamGeometry x:Key="GearIcon">M19.4 13a7 7 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a8 8 0 0 0-1.8-1L14.8 3h-4l-.4 2.9a8 8 0 0 0-1.8 1l-2.5-1-2 3.5L6.2 11a7 7 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a8 8 0 0 0 1.8 1l.4 2.9h4l.4-2.9a8 8 0 0 0 1.8-1l2.5 1 2-3.5z M12.8 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z</StreamGeometry>
@@ -12,15 +11,17 @@
       <StreamGeometry x:Key="InfoIcon">M12 2A10 10 0 1 0 12 22A10 10 0 1 0 12 2 M12 4A8 8 0 1 1 12 20A8 8 0 1 1 12 4 M11 10H13V17H11Z M11 7H13V9H11Z</StreamGeometry>
       <ResourceDictionary.ThemeDictionaries>
         <ResourceDictionary x:Key="Light">
-          <SolidColorBrush x:Key="BrandInk">Black</SolidColorBrush>
+          <SolidColorBrush x:Key="BrandInk">#20252A</SolidColorBrush>
           <SolidColorBrush x:Key="Paper">#FFFFFF</SolidColorBrush>
-          <SolidColorBrush x:Key="HeaderFill">#F5F5F5</SolidColorBrush>
-          <SolidColorBrush x:Key="SidebarFill">#FAFAFA</SolidColorBrush>
-          <SolidColorBrush x:Key="Ink">#DE000000</SolidColorBrush>
-          <SolidColorBrush x:Key="Muted">#99000000</SolidColorBrush>
-          <SolidColorBrush x:Key="Divider">#1F000000</SolidColorBrush>
-          <SolidColorBrush x:Key="PopupOutline">#70000000</SolidColorBrush>
-          <SolidColorBrush x:Key="Primary">#1976D2</SolidColorBrush>
+          <SolidColorBrush x:Key="HeaderFill">#F7F8FA</SolidColorBrush>
+          <SolidColorBrush x:Key="SidebarFill">#EFF2F5</SolidColorBrush>
+          <SolidColorBrush x:Key="Ink">#222930</SolidColorBrush>
+          <SolidColorBrush x:Key="Muted">#59646F</SolidColorBrush>
+          <SolidColorBrush x:Key="Divider">#D9DFE4</SolidColorBrush>
+          <SolidColorBrush x:Key="PopupOutline">#A5AFB8</SolidColorBrush>
+          <SolidColorBrush x:Key="Primary">#1769AC</SolidColorBrush>
+          <SolidColorBrush x:Key="SuccessInk">#216B50</SolidColorBrush>
+          <SolidColorBrush x:Key="WarningInk">#865600</SolidColorBrush>
           <SolidColorBrush x:Key="PrimaryHover">#1565C0</SolidColorBrush>
           <SolidColorBrush x:Key="ProgressTrack">#A7CAED</SolidColorBrush>
           <SolidColorBrush x:Key="DangerInk">#C62828</SolidColorBrush>
@@ -30,7 +31,7 @@
           <SolidColorBrush x:Key="HoverFill">#0A000000</SolidColorBrush>
           <SolidColorBrush x:Key="SelectedFill">#14000000</SolidColorBrush>
           <SolidColorBrush x:Key="PressedFill">#1F000000</SolidColorBrush>
-          <SolidColorBrush x:Key="FieldFill">#0F000000</SolidColorBrush>
+          <SolidColorBrush x:Key="FieldFill">#FFFFFF</SolidColorBrush>
           <SolidColorBrush x:Key="FieldHover">#17000000</SolidColorBrush>
           <SolidColorBrush x:Key="OptionSelectedFill">#E5F0FB</SolidColorBrush>
           <SolidColorBrush x:Key="DisabledInk">#61000000</SolidColorBrush>
@@ -38,14 +39,16 @@
         </ResourceDictionary>
         <ResourceDictionary x:Key="Dark">
           <SolidColorBrush x:Key="BrandInk">White</SolidColorBrush>
-          <SolidColorBrush x:Key="Paper">#121212</SolidColorBrush>
-          <SolidColorBrush x:Key="HeaderFill">#212121</SolidColorBrush>
-          <SolidColorBrush x:Key="SidebarFill">#212121</SolidColorBrush>
-          <SolidColorBrush x:Key="Ink">White</SolidColorBrush>
-          <SolidColorBrush x:Key="Muted">#B3FFFFFF</SolidColorBrush>
-          <SolidColorBrush x:Key="Divider">#1FFFFFFF</SolidColorBrush>
+          <SolidColorBrush x:Key="Paper">#25282C</SolidColorBrush>
+          <SolidColorBrush x:Key="HeaderFill">#1D2023</SolidColorBrush>
+          <SolidColorBrush x:Key="SidebarFill">#181B1E</SolidColorBrush>
+          <SolidColorBrush x:Key="Ink">#F2F4F5</SolidColorBrush>
+          <SolidColorBrush x:Key="Muted">#B5BEC6</SolidColorBrush>
+          <SolidColorBrush x:Key="Divider">#41464C</SolidColorBrush>
           <SolidColorBrush x:Key="PopupOutline">#66FFFFFF</SolidColorBrush>
           <SolidColorBrush x:Key="Primary">#90CAF9</SolidColorBrush>
+          <SolidColorBrush x:Key="SuccessInk">#87D6AD</SolidColorBrush>
+          <SolidColorBrush x:Key="WarningInk">#F0C379</SolidColorBrush>
           <SolidColorBrush x:Key="PrimaryHover">#42A5F5</SolidColorBrush>
           <SolidColorBrush x:Key="ProgressTrack">#395063</SolidColorBrush>
           <SolidColorBrush x:Key="DangerInk">#FF9B96</SolidColorBrush>
@@ -68,6 +71,49 @@
   <Style Selector="TextBlock.secondary">
     <Setter Property="Foreground" Value="{DynamicResource Muted}" />
   </Style>
+  <Style Selector="PathIcon.activityInk">
+    <Setter Property="Foreground" Value="{DynamicResource Primary}" />
+  </Style>
+  <Style Selector="PathIcon.mutedIcon">
+    <Setter Property="Foreground" Value="{DynamicResource Muted}" />
+  </Style>
+  <Style Selector="TextBlock.healthy">
+    <Setter Property="Foreground" Value="{DynamicResource SuccessInk}" />
+  </Style>
+  <Style Selector="PathIcon.healthy">
+    <Setter Property="Foreground" Value="{DynamicResource SuccessInk}" />
+  </Style>
+  <Style Selector="TextBlock.warning">
+    <Setter Property="Foreground" Value="{DynamicResource WarningInk}" />
+  </Style>
+  <Style Selector="TextBlock.failure">
+    <Setter Property="Foreground" Value="{DynamicResource DangerInk}" />
+  </Style>
+  <Style Selector="PathIcon.failure">
+    <Setter Property="Foreground" Value="{DynamicResource DangerInk}" />
+  </Style>
+  <Style Selector="TextBlock.pageTitle">
+    <Setter Property="FontSize" Value="22" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+  <Style Selector="StackPanel.reveal[IsVisible=True]">
+    <Style.Animations>
+      <Animation Duration="0:0:0.16" Easing="CubicEaseOut">
+        <KeyFrame Cue="0%"><Setter Property="Opacity" Value="0.55" /></KeyFrame>
+        <KeyFrame Cue="100%"><Setter Property="Opacity" Value="1" /></KeyFrame>
+      </Animation>
+    </Style.Animations>
+  </Style>
+  <Style Selector="Button:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button:pressed /template/ ContentPresenter#PART_ContentPresenter, ListBox#Navigation ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Transitions">
+      <Transitions><BrushTransition Property="Background" Duration="0:0:0.10" /></Transitions>
+    </Setter>
+  </Style>
+  <Style Selector="TextBox.filled /template/ Border#PART_BorderElement">
+    <Setter Property="Transitions">
+      <Transitions><BrushTransition Property="BorderBrush" Duration="0:0:0.12" /></Transitions>
+    </Setter>
+  </Style>
   <Style Selector="ProgressBar.syncProgress">
     <Setter Property="Foreground" Value="{DynamicResource Primary}" />
     <Setter Property="Background" Value="{DynamicResource ProgressTrack}" />
@@ -77,12 +123,32 @@
     <Setter Property="Margin" Value="-16,6,-16,6" />
     <Setter Property="Background" Value="{DynamicResource Divider}" />
   </Style>
-  <Style Selector="Button.chip"><Setter Property="Padding" Value="9,2" /><Setter Property="CornerRadius" Value="16" /><Setter Property="MinHeight" Value="24" /><Setter Property="FontSize" Value="13" /><Setter Property="VerticalContentAlignment" Value="Center" /><Setter Property="Background" Value="Transparent" /><Setter Property="BorderBrush" Value="{DynamicResource Divider}" /></Style>
-  <Style Selector="Button.chip.selected"><Setter Property="Background" Value="{DynamicResource SelectedFill}" /></Style>
+  <Style Selector="Button.chip">
+    <Setter Property="Padding" Value="10,3" />
+    <Setter Property="CornerRadius" Value="14" />
+    <Setter Property="MinHeight" Value="27" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="Background" Value="{DynamicResource Paper}" />
+    <Setter Property="Foreground" Value="{DynamicResource Ink}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Divider}" />
+  </Style>
+  <Style Selector="Button.chip.selected">
+    <Setter Property="Background" Value="{DynamicResource OptionSelectedFill}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Primary}" />
+    <Setter Property="Foreground" Value="{DynamicResource Primary}" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
   <Style Selector="Button.chip.add"><Setter Property="Background" Value="{DynamicResource Primary}" /><Setter Property="Foreground" Value="{DynamicResource OnPrimary}" /></Style>
-  <Style Selector="Border.card"><Setter Property="BorderThickness" Value="1" /><Setter Property="BorderBrush" Value="{DynamicResource Divider}" /><Setter Property="CornerRadius" Value="12" /><Setter Property="Padding" Value="16" /></Style>
+  <Style Selector="Border.card">
+    <Setter Property="Background" Value="{DynamicResource Paper}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Divider}" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="Padding" Value="16" />
+  </Style>
   <Style Selector="Button.primary, Button.tool">
-    <Setter Property="CornerRadius" Value="12" />
+    <Setter Property="CornerRadius" Value="7" />
     <Setter Property="VerticalContentAlignment" Value="Center" />
     <Setter Property="HorizontalContentAlignment" Value="Center" />
     <Setter Property="FontWeight" Value="Medium" />
@@ -155,9 +221,9 @@
     <Setter Property="Background" Value="{DynamicResource FieldFill}" />
     <Setter Property="Foreground" Value="{DynamicResource Ink}" />
     <Setter Property="CaretBrush" Value="{DynamicResource Primary}" />
-    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Divider}" />
     <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="12" />
+    <Setter Property="CornerRadius" Value="7" />
     <Setter Property="FontSize" Value="16" />
   </Style>
   <Style Selector="TextBox.filled:not(:disabled) /template/ TextBlock#PART_Placeholder">
@@ -165,7 +231,7 @@
   </Style>
   <Style Selector="TextBox.filled:pointerover /template/ Border#PART_BorderElement">
     <Setter Property="Background" Value="{DynamicResource FieldHover}" />
-    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="{DynamicResource PopupOutline}" />
   </Style>
   <Style Selector="TextBox.filled:focus /template/ Border#PART_BorderElement">
     <Setter Property="Background" Value="{DynamicResource FieldFill}" />
@@ -221,7 +287,7 @@
   </Style>
 
   <Style Selector="ListBox#Navigation ListBoxItem">
-    <Setter Property="CornerRadius" Value="12" />
+    <Setter Property="CornerRadius" Value="7" />
     <Setter Property="Margin" Value="0,0,0,4" />
     <Setter Property="Padding" Value="16,8" />
     <Setter Property="Foreground" Value="{DynamicResource Ink}" />
@@ -233,8 +299,12 @@
     <Setter Property="Background" Value="{DynamicResource HoverFill}" />
   </Style>
   <Style Selector="ListBox#Navigation ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="{DynamicResource SelectedFill}" />
-    <Setter Property="Foreground" Value="{DynamicResource Ink}" />
+    <Setter Property="Background" Value="{DynamicResource OptionSelectedFill}" />
+    <Setter Property="Foreground" Value="{DynamicResource Primary}" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+  <Style Selector="ListBox#Navigation ListBoxItem:selected PathIcon">
+    <Setter Property="Foreground" Value="{DynamicResource Primary}" />
   </Style>
   <Style Selector="ListBox#Navigation ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter, ListBox#Navigation ListBoxItem:pressed /template/ ContentPresenter#PART_ContentPresenter">
     <Setter Property="Background" Value="{DynamicResource PressedFill}" />
