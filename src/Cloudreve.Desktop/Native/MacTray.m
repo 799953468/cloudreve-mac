@@ -4,18 +4,13 @@ typedef void (*TrayAction)(int);
 
 @interface CloudreveTray : NSObject
 @property(nonatomic, strong) NSStatusItem *item;
-@property(nonatomic, strong) NSMenu *menu;
+@property(nonatomic, strong) id clickMonitor;
 @property(nonatomic) TrayAction action;
 @end
 
 @implementation CloudreveTray
 - (void)clicked:(id)sender {
-    NSEvent *event = NSApp.currentEvent;
-    if (event.type == NSEventTypeRightMouseUp || (event.modifierFlags & NSEventModifierFlagControl)) {
-        [self.menu popUpMenuPositioningItem:nil atLocation:NSMakePoint(0, NSMinY(self.item.button.bounds)) inView:self.item.button];
-    } else {
-        self.action(0);
-    }
+    self.action(0);
 }
 - (void)selected:(NSMenuItem *)sender { self.action((int)sender.tag); }
 @end
@@ -99,14 +94,25 @@ void cloudreve_tray_start(TrayAction action, const char *show, const char *add, 
     tray.item = [NSStatusBar.systemStatusBar statusItemWithLength:NSSquareStatusItemLength];
     tray.item.button.target = tray;
     tray.item.button.action = @selector(clicked:);
-    [tray.item.button sendActionOn:NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp];
-    tray.menu = [NSMenu new];
+    NSMenu *menu = [NSMenu new];
     const char *titles[] = {show, add, settings, quit};
     for (NSInteger i = 0; i < 4; ++i) {
-        NSMenuItem *entry = [tray.menu addItemWithTitle:[NSString stringWithUTF8String:titles[i]] action:@selector(selected:) keyEquivalent:@""];
+        NSMenuItem *entry = [menu addItemWithTitle:[NSString stringWithUTF8String:titles[i]] action:@selector(selected:) keyEquivalent:@""];
         entry.target = tray;
         entry.tag = i;
     }
+    // Handle secondary clicks before the status bar button starts mouse tracking.
+    NSStatusBarButton *button = tray.item.button;
+    tray.clickMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskRightMouseDown | NSEventMaskLeftMouseDown
+        handler:^NSEvent *(NSEvent *event) {
+            BOOL secondary = event.type == NSEventTypeRightMouseDown || (event.modifierFlags & NSEventModifierFlagControl);
+            if (secondary && event.window == button.window &&
+                NSPointInRect([button convertPoint:event.locationInWindow fromView:nil], button.bounds)) {
+                [menu popUpMenuPositioningItem:nil atLocation:NSMakePoint(NSMinX(button.bounds), button.isFlipped ? NSMaxY(button.bounds) : NSMinY(button.bounds)) inView:button];
+                return nil;
+            }
+            return event;
+        }];
 }
 
 void cloudreve_tray_position(id handle) {
@@ -120,5 +126,9 @@ void cloudreve_tray_position(id handle) {
 }
 
 void cloudreve_tray_stop(void) {
-    if (tray) { [NSStatusBar.systemStatusBar removeStatusItem:tray.item]; tray = nil; }
+    if (tray) {
+        [NSEvent removeMonitor:tray.clickMonitor];
+        [NSStatusBar.systemStatusBar removeStatusItem:tray.item];
+        tray = nil;
+    }
 }
