@@ -154,6 +154,7 @@ public sealed class FolderPairSyncTests : IDisposable
         try
         {
             await both.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            Assert.Equal(ScanPhase.Idle, activity.ChangesSince(-1)!.Scan.Phase);
             Assert.Equal(["a", "b"], activity.ChangesSince(-1)!.Active.Select(file => file.Entry.Key).Order());
         }
         finally
@@ -215,7 +216,9 @@ public sealed class FolderPairSyncTests : IDisposable
         using (var readers = new Barrier(2))
         {
             var restored = new GatedBaseline(store.ReadBaseline(pair), readers, cancel);
-            var inventory = await PairInventory.ReadLocalAsync(pair, new PairIgnoreRules(""), restored, new AdaptiveWorkQueue(), cancel);
+            var counts = new List<int>();
+            var inventory = await PairInventory.ReadLocalAsync(pair, new PairIgnoreRules(""), restored, new AdaptiveWorkQueue(), cancel, counts.Add);
+            Assert.Equal([1, 2], counts);
             Assert.Equal(1, readers.CurrentPhaseNumber);
             Assert.Equal(restored["first"].LocalHash, inventory.Nodes["first"].Hash);
             Assert.Equal(restored["second"].LocalHash, inventory.Nodes["second"].Hash);
@@ -253,6 +256,7 @@ public sealed class FolderPairSyncTests : IDisposable
         var before = store.ReadBaseline(pair);
         var waiting = TransferQueue.Open(store.TransferDirectory(pair)).Reconcile([new FileTransfer("pending", SyncAction.Upload, null, null, null)]);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var activity = new SyncActivity();
         bool drained = false;
         using (var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken))
         {
@@ -260,6 +264,7 @@ public sealed class FolderPairSyncTests : IDisposable
             {
                 if (uri == slow)
                 {
+                    Assert.Equal(new ScanStatus(ScanPhase.Remote, 3), activity.ChangesSince(-1)!.Scan);
                     entered.SetResult();
                     try
                     {
@@ -284,7 +289,7 @@ public sealed class FolderPairSyncTests : IDisposable
                 }
             };
 
-            var restored = new FolderPairSync(store, store.Load()!, new DriveClient(http, http, session, _ => { }));
+            var restored = new FolderPairSync(store, store.Load()!, new DriveClient(http, http, session, _ => { }), activity);
             var scan = restored.RunAsync(stop.Token);
             if (cancelScan)
             {
@@ -297,6 +302,7 @@ public sealed class FolderPairSyncTests : IDisposable
         }
 
         Assert.True(drained);
+        Assert.Equal(cancelScan ? ScanPhase.Idle : ScanPhase.Failed, activity.ChangesSince(-1)!.Scan.Phase);
         Assert.Empty(site.TrashRequests);
         Assert.Equal("still on cloud", site.Files[Root + "/deleted-locally"].Text);
         Assert.Equal("still here", File.ReadAllText(Path.Combine(pair.Local, "deleted-remotely")));
@@ -306,7 +312,8 @@ public sealed class FolderPairSyncTests : IDisposable
 
         site.BeforeMetadataAsync = null;
         site.Incomplete = false;
-        Assert.Equal(2, (await RunAsync()).Removed);
+        Assert.Equal(2, (await RunAsync(activity)).Removed);
+        Assert.Equal(ScanPhase.Idle, activity.ChangesSince(-1)!.Scan.Phase);
     }
 
     [Fact]

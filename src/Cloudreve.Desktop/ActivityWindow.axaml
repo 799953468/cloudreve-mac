@@ -17,6 +17,9 @@
     <Style Selector="PathIcon.queueCompare">
       <Setter Property="Data" Value="M3 7h13l-3-3 1.5-1.5L20 8l-5.5 5.5L13 12l3-3H3z M21 17H8l3 3-1.5 1.5L4 16l5.5-5.5L11 12l-3 3h13z" />
     </Style>
+    <Style Selector="TextBlock.scanFailure">
+      <Setter Property="Foreground" Value="{DynamicResource DangerInk}" />
+    </Style>
   </Window.Styles>
   <Border BorderBrush="{DynamicResource PopupOutline}" BorderThickness="1">
     <Grid RowDefinitions="Auto,*,Auto">
@@ -27,6 +30,26 @@
       </Border>
       <Grid Grid.Row="1"><ScrollViewer x:Name="TaskScroll" HorizontalScrollBarVisibility="Disabled">
         <StackPanel x:Name="Tasks">
+          <StackPanel x:Name="ScanSection">
+            <Grid ColumnDefinitions="*,56" Margin="16,8,16,0">
+              <TextBlock Classes="activitySection" Margin="0" Text="{d:DesktopText popup.scanStatus}" />
+              <ProgressBar x:Name="ScanProgress" Grid.Column="1" Classes="syncProgress" MinWidth="0" Width="56" Height="3" ClipToBounds="True" VerticalAlignment="Center" IsIndeterminate="True" />
+            </Grid>
+            <ItemsControl x:Name="ScanItems">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="d:ScanRow" x:CompileBindings="True">
+                  <Grid ColumnDefinitions="32,*,Auto" ColumnSpacing="8" Margin="16,5">
+                    <PathIcon Width="20" Height="20" Foreground="{DynamicResource Muted}" Data="{StaticResource FolderIcon}" />
+                    <StackPanel Grid.Column="1" Spacing="1">
+                      <TextBlock Text="{Binding Drive}" FontWeight="Medium" LineHeight="19" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Drive}" />
+                      <TextBlock Text="{Binding PhaseText}" Classes="secondary" Classes.scanFailure="{Binding Failed}" FontSize="12" LineHeight="16" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <TextBlock Grid.Column="2" Text="{Binding CountText}" IsVisible="{Binding !Failed}" Classes="secondary" FontSize="12" VerticalAlignment="Center" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
           <StackPanel x:Name="ActiveSection">
             <TextBlock Classes="activitySection" Text="{d:DesktopText popup.syncing}" />
             <StackPanel x:Name="ActiveRows" />

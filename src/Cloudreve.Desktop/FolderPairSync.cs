@@ -23,27 +23,50 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
     {
         using (store.Lock(pair))
         {
-            FolderPairStore.Verify(pair);
-            var queue = TransferQueue.Open(store.TransferDirectory(pair));
-            var baseline = store.ReadBaseline(pair);
-            foreach (string key in baseline.Keys)
+            TransferQueue queue;
+            Dictionary<string, FileBaseline> baseline;
+            PairIgnoreRules rules;
+            PairInventory local, remote;
+            activity?.SetScan(ScanPhase.Local);
+            try
             {
-                PairInventory.ValidateKey(key);
-            }
+                FolderPairStore.Verify(pair);
+                queue = TransferQueue.Open(store.TransferDirectory(pair));
+                baseline = store.ReadBaseline(pair);
+                foreach (string key in baseline.Keys)
+                {
+                    PairInventory.ValidateKey(key);
+                }
 
-            var rules = new PairIgnoreRules(store.ReadRules(pair));
-            // A worker can finish before the coordinator gets to commit the batch baseline.
-            if (queue.RestoreVerified(baseline, rules))
-            {
+                rules = new PairIgnoreRules(store.ReadRules(pair));
+                // A worker can finish before the coordinator gets to commit the batch baseline.
+                if (queue.RestoreVerified(baseline, rules))
+                {
+                    await VerifyRemoteRootAsync(cancel);
+                    store.SaveBaseline(pair, baseline);
+                }
+
+                local = await PairInventory.ReadLocalAsync(pair, rules, baseline, localScan, cancel,
+                    activity == null ? null : count => activity.SetScan(ScanPhase.Local, count));
+                activity?.SetScan(ScanPhase.Remote);
                 await VerifyRemoteRootAsync(cancel);
-                store.SaveBaseline(pair, baseline);
+                remote = await PairInventory.ReadRemoteAsync(pair.Remote, "", drive, rules, remoteScan, cancel,
+                    activity == null ? null : count => activity.SetScan(ScanPhase.Remote, count));
+                await VerifyRemoteRootAsync(cancel);
+                FolderPairStore.Verify(pair);
+            }
+            catch (Exception) when (cancel.IsCancellationRequested)
+            {
+                activity?.SetScan(ScanPhase.Idle);
+                throw;
+            }
+            catch
+            {
+                activity?.SetScan(ScanPhase.Failed);
+                throw;
             }
 
-            var local = await PairInventory.ReadLocalAsync(pair, rules, baseline, localScan, cancel);
-            await VerifyRemoteRootAsync(cancel);
-            var remote = await PairInventory.ReadRemoteAsync(pair.Remote, "", drive, rules, remoteScan, cancel);
-            await VerifyRemoteRootAsync(cancel);
-            FolderPairStore.Verify(pair);
+            activity?.SetScan(ScanPhase.Idle);
 
             // Visit parents first. A collision or an unsupported node also protects its descendants.
             var conflicts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

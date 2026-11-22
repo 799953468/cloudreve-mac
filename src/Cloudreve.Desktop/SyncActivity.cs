@@ -16,7 +16,16 @@ internal sealed record ActivityTransfer(long Id, string Phase, long Completed, l
 
 internal sealed record ActiveFile(ActivityEntry Entry, ActivityTransfer? Transfer);
 internal sealed record WaitingFile(string Key, SyncAction Action);
-internal sealed record ActivitySnapshot(long Revision, ActiveFile[] Active, ActivityEntry[] Recent, WaitingFile[] Waiting, int WaitingCount);
+internal enum ScanPhase
+{
+    Idle,
+    Local,
+    Remote,
+    Failed
+}
+
+internal readonly record struct ScanStatus(ScanPhase Phase, int ItemCount = 0);
+internal sealed record ActivitySnapshot(long Revision, ActiveFile[] Active, ActivityEntry[] Recent, WaitingFile[] Waiting, int WaitingCount, ScanStatus Scan);
 
 internal sealed class SyncActivity
 {
@@ -27,6 +36,7 @@ internal sealed class SyncActivity
         internal readonly Queue<ActivityEntry> Recent = new();
         internal readonly LinkedList<WaitingFile> Waiting = new();
         internal readonly Dictionary<string, LinkedListNode<WaitingFile>> WaitingByKey = new(StringComparer.Ordinal);
+        internal ScanStatus Scan;
         internal string? HistoryPath;
         internal long Revision;
     }
@@ -78,6 +88,19 @@ internal sealed class SyncActivity
     internal SyncActivity CreateWorker()
     {
         return new SyncActivity(state);
+    }
+
+    internal void SetScan(ScanPhase phase, int itemCount = 0)
+    {
+        var scan = new ScanStatus(phase, itemCount);
+        lock (state)
+        {
+            if (state.Scan != scan)
+            {
+                state.Scan = scan;
+                state.Revision++;
+            }
+        }
     }
 
     internal void Start(string operation, string key)
@@ -208,7 +231,7 @@ internal sealed class SyncActivity
             }
 
             var active = state.Active.Select(worker => new ActiveFile(worker.current!, worker.transfer)).ToArray();
-            return new ActivitySnapshot(state.Revision, active, state.Recent.Reverse().ToArray(), state.Waiting.Take(Capacity).ToArray(), state.Waiting.Count);
+            return new ActivitySnapshot(state.Revision, active, state.Recent.Reverse().ToArray(), state.Waiting.Take(Capacity).ToArray(), state.Waiting.Count, state.Scan);
         }
     }
 }

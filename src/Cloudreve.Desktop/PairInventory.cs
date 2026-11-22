@@ -98,7 +98,7 @@ internal sealed class PairInventory
     }
 
     internal static async Task<PairInventory> ReadLocalAsync(FolderPair pair, PairIgnoreRules rules, IReadOnlyDictionary<string, FileBaseline> baseline,
-        AdaptiveWorkQueue scan, CancellationToken cancel)
+        AdaptiveWorkQueue scan, CancellationToken cancel, Action<int>? reportCount = null)
     {
         var inventory = new PairInventory();
         // Enumeration and cached metadata reads are synchronous even when no file needs hashing.
@@ -116,6 +116,8 @@ internal sealed class PairInventory
                         enqueue(child);
                     }
                 }
+
+                reportCount?.Invoke(inventory.Nodes.Count);
             }, cancel);
         return inventory;
 
@@ -200,7 +202,7 @@ internal sealed class PairInventory
     }
 
     internal static async Task<PairInventory> ReadRemoteAsync(string rootUri, string rootKey, DriveClient drive, PairIgnoreRules rules,
-        AdaptiveWorkQueue scan, CancellationToken cancel)
+        AdaptiveWorkQueue scan, CancellationToken cancel, Action<int>? reportCount = null)
     {
         var inventory = new PairInventory();
         var root = (Key: rootKey, Uri: rootUri);
@@ -231,6 +233,8 @@ internal sealed class PairInventory
                     enqueue((key, entry.Uri));
                 }
             }
+
+            reportCount?.Invoke(inventory.Nodes.Count);
         }, cancel);
 
         // Resolve only unambiguous files after listings (including all pages) have passed validation.

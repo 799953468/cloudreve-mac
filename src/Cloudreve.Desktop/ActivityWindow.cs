@@ -6,6 +6,25 @@ using Avalonia.Threading;
 
 namespace Cloudreve.Desktop;
 
+internal sealed record ScanRow(string Drive, ScanStatus Scan)
+{
+    public bool Failed { get { return Scan.Phase == ScanPhase.Failed; } }
+    public string PhaseText
+    {
+        get
+        {
+            return Scan.Phase switch
+            {
+                ScanPhase.Local => DesktopText.Get("popup.scanLocal"),
+                ScanPhase.Remote => DesktopText.Get("popup.scanRemote"),
+                ScanPhase.Failed => DesktopText.Get("popup.scanRetry"),
+                _ => throw new InvalidOperationException()
+            };
+        }
+    }
+    public string CountText { get { return DesktopText.Get("popup.scanItems").Replace("{{count}}", Scan.ItemCount.ToString()); } }
+}
+
 internal sealed record WaitingRow(string Drive, WaitingFile File)
 {
     public string FileName { get { return Path.GetFileName(File.Key); } }
@@ -44,6 +63,7 @@ internal sealed partial class ActivityWindow : Window
     private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly Dictionary<MountedDrive, ActivitySnapshot> snapshots = [];
     private readonly TextDecorationCollection folderUnderline = [new TextDecoration { Location = TextDecorationLocation.Underline }];
+    private ScanRow[] displayedScans = [];
     private WaitingRow[] displayedWaiting = [];
     private MountedDrive? selected;
 
@@ -143,8 +163,20 @@ internal sealed partial class ActivityWindow : Window
         var recent = snapshots.SelectMany(s => s.Value.Recent.Select(e => (Drive: s.Key, Entry: e))).OrderByDescending(e => e.Entry.Time).Take(100).ToArray();
         int waitingCount = snapshots.Values.Sum(snapshot => snapshot.WaitingCount);
         string waitingLabel = DesktopText.Get("popup.queued").Replace("{{count}}", waitingCount.ToString());
-        Empty.IsVisible = active.Length == 0 && recent.Length == 0 && waitingCount == 0;
+        var scans = snapshots.Where(s => s.Value.Scan.Phase != ScanPhase.Idle)
+            .Select(s => new ScanRow(s.Key.Account.Name, s.Value.Scan)).ToArray();
+        bool scanning = scans.Any(row => !row.Failed);
+        bool idle = scans.Length == 0 && active.Length == 0 && waitingCount == 0;
+        Empty.IsVisible = idle && recent.Length == 0;
         TaskScroll.IsVisible = !Empty.IsVisible;
+        ScanSection.IsVisible = scans.Length > 0;
+        ScanProgress.IsVisible = scanning;
+        if (!scans.SequenceEqual(displayedScans))
+        {
+            displayedScans = scans;
+            ScanItems.ItemsSource = scans;
+        }
+
         ActiveSection.IsVisible = active.Length > 0;
         ActiveRows.Children.Clear();
         foreach (var (drive, file) in active)
@@ -173,11 +205,18 @@ internal sealed partial class ActivityWindow : Window
             RecentRows.Children.Add(Row(drive, entry, false, null));
         }
 
-        bool idle = active.Length == 0 && waitingCount == 0;
-        Footer.Text = active.Length > 0 ? DesktopText.Get("popup.syncingStatus").Replace("{{count}}", active.Length.ToString()) :
-            idle ? DesktopText.Get("popup.upToDate") : waitingLabel;
-        StatusIcon.Data = StreamGeometry.Parse(idle ? "M12 2a10 10 0 1 0 0 20a10 10 0 1 0 0-20 M10 17l-5-5 1.5-1.5 3.5 3.5 7-7 1.5 1.5z" : "M4 5v5h5L7 8a6 6 0 1 1-1 7H3a9 9 0 1 0 2-9z");
-        StatusIcon.Foreground = idle ? Brushes.SeaGreen : Brushes.DodgerBlue;
+        bool showFailure = active.Length == 0 && !scanning && scans.Length > 0;
+        Footer.Text = active.Length switch
+        {
+            > 0 => DesktopText.Get("popup.syncingStatus").Replace("{{count}}", active.Length.ToString()),
+            _ when scanning => DesktopText.Get("popup.scanning"),
+            _ when showFailure => DesktopText.Get("popup.scanFailed"),
+            _ when waitingCount > 0 => waitingLabel,
+            _ => DesktopText.Get("popup.upToDate")
+        };
+        StatusIcon.Data = StreamGeometry.Parse(showFailure ? "M12 2 1 21h22z M11 8h2v7h-2z M11 17h2v2h-2z" :
+            idle ? "M12 2a10 10 0 1 0 0 20a10 10 0 1 0 0-20 M10 17l-5-5 1.5-1.5 3.5 3.5 7-7 1.5 1.5z" : "M4 5v5h5L7 8a6 6 0 1 1-1 7H3a9 9 0 1 0 2-9z");
+        StatusIcon.Foreground = showFailure ? Brushes.IndianRed : idle ? Brushes.SeaGreen : Brushes.DodgerBlue;
     }
 
     private Grid Row(MountedDrive drive, ActivityEntry entry, bool active, ActivityTransfer? transfer)

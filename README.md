@@ -58,6 +58,8 @@ On macOS 13 or later, turn on **Settings > General > Launch at startup** in `Clo
 <details>
 <summary>How scans and retries work</summary>
 
+Click the Cloudreve menu bar icon to see which drives are scanning. Each drive shows whether it is checking the local or cloud folder and how many items it has found on that side. A failed scan stays visible until the next attempt.
+
 At startup and during routine sync, the app checks local files and lists remote folders in parallel, reading each folder's pages in order. It waits for complete scans on both sides and rechecks the paired root before transferring or deleting anything.
 
 Local scans, remote scans, and transfers each start with two concurrent operations per drive and can grow to six while work is waiting. Rate limits, service-unavailable responses, or request timeouts stop the current pass and halve the affected limit, down to one. The next pass scans again. Folder changes, moves, deletions, and chunks within a single upload stay sequential.

@@ -232,6 +232,7 @@ public sealed class WindowTests : IDisposable
                 Assert.Null(host.Popup);
                 Assert.Null(host.Settings);
                 await transport.RootScanned.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                await transport.ListingHeld.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 Assert.Equal("rotated", sessions.Load()!.AccessToken);
                 var work = host.Drives[0];
                 work.Activity.Start("上传", "first.txt");
@@ -259,12 +260,16 @@ public sealed class WindowTests : IDisposable
                 Capture(popup, dark ? "activity-dark" : "activity");
                 Click(Assert.IsType<Button>(popup.Chips.Children[1]));
                 Assert.False(popup.WaitingSection.IsVisible);
+                Assert.DoesNotContain(popup.ScanItems.Items.OfType<ScanRow>(), row => row.Drive == "Personal");
                 Click(Assert.IsType<Button>(popup.Chips.Children[2]));
                 popup.UpdateLayout();
                 Assert.DoesNotContain("first.txt", Labels(popup.Tasks));
                 Assert.Contains("second.txt", Labels(popup.Tasks));
                 Assert.Equal(waitingLabels, Labels(popup.WaitingItems));
-                Assert.Equal("等待传输（3）", popup.Footer.Text);
+                Assert.True(popup.ScanSection.IsVisible);
+                Assert.Contains("正在扫描云端文件夹", Labels(popup.ScanItems));
+                Assert.Equal("Personal", Assert.Single(popup.ScanItems.Items.OfType<ScanRow>()).Drive);
+                Assert.Equal("正在扫描…", popup.Footer.Text);
                 var backlog = Enumerable.Range(0, SyncActivity.Capacity + 2).Select(i =>
                     new QueuedFile(Guid.NewGuid(), new FileTransfer($"{i}.txt", SyncAction.Upload, null, null, null))).ToArray();
                 host.Drives[1].Activity.SetPending(backlog);
@@ -284,6 +289,53 @@ public sealed class WindowTests : IDisposable
             finally
             {
                 host.Settings?.Close();
+                host.Popup?.Close();
+                await host.StopAsync();
+            }
+
+            return true;
+        }, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task ScanWithoutTransfersReplacesEmptyStateUntilIdle()
+    {
+        await using var ui = HeadlessUnitTestSession.StartNew(typeof(TestApplication));
+        await ui.Dispatch(async () =>
+        {
+            sessions.Save(new DriveSession("https://site.example/", "work", "Work", "cloudreve://my", "u", "access", "refresh",
+                DateTimeOffset.UtcNow.AddHours(1), DateTimeOffset.UtcNow.AddDays(1)));
+            var host = new WorkspaceHost(new DriveProfiles(sessions), transport: transport);
+            try
+            {
+                host.Start();
+                var activity = Assert.Single(host.Drives).Activity;
+                activity.SetScan(ScanPhase.Local, 42);
+                host.OpenPopup();
+                var popup = host.Popup!;
+                popup.UpdateLayout();
+                Assert.False(popup.Empty.IsVisible);
+                Assert.True(popup.ScanProgress.IsVisible);
+                Assert.Equal("正在扫描…", popup.Footer.Text);
+                Assert.Contains("正在扫描本地文件夹", Labels(popup.ScanItems));
+                Assert.Contains("已发现 42 项", Labels(popup.ScanItems));
+
+                activity.SetScan(ScanPhase.Failed);
+                popup.Refresh();
+                popup.UpdateLayout();
+                Assert.False(popup.Empty.IsVisible);
+                Assert.False(popup.ScanProgress.IsVisible);
+                Assert.Equal("扫描失败", popup.Footer.Text);
+                Assert.Contains("扫描失败，将自动重试", Labels(popup.ScanItems));
+
+                activity.SetScan(ScanPhase.Idle);
+                popup.Refresh();
+                Assert.False(popup.ScanSection.IsVisible);
+                Assert.True(popup.Empty.IsVisible);
+                Assert.Equal("文件已是最新。", popup.Footer.Text);
+            }
+            finally
+            {
                 host.Popup?.Close();
                 await host.StopAsync();
             }
@@ -491,6 +543,7 @@ public sealed class WindowTests : IDisposable
     {
         internal int Exchanges { get; private set; }
         internal string? HoldListingFor { get; set; }
+        internal TaskCompletionSource ListingHeld { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource RootScanned { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -515,6 +568,7 @@ public sealed class WindowTests : IDisposable
                 case "/api/v4/file":
                     if (HoldListingFor != null && request.Headers.GetValues("X-Cr-Client-Id").Contains(HoldListingFor))
                     {
+                        ListingHeld.TrySetResult();
                         await Task.Delay(Timeout.Infinite, cancellationToken);
                     }
 
