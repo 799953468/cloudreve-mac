@@ -167,6 +167,7 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
         watcher = null;
         lifetime?.Cancel();
         await workers;
+        await Activity.FlushHistoryAsync();
         lock (bindingGate)
         {
             binding = null;

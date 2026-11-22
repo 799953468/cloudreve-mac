@@ -6,6 +6,34 @@ namespace Cloudreve.Sync.Tests;
 public sealed class SyncActivityTests
 {
     [Fact]
+    public async Task FlushingConcurrentWorkersPersistsTheLatestBoundedHistory()
+    {
+        var directory = Directory.CreateTempSubdirectory();
+        try
+        {
+            var activity = new SyncActivity(directory.FullName);
+            var workers = Enumerable.Range(0, 4).Select(index => Task.Run(() =>
+            {
+                var worker = activity.CreateWorker();
+                for (int i = 0; i < 50; i++)
+                {
+                    worker.Start("upload", $"{index}/{i}");
+                    worker.Finish("done");
+                }
+            }, TestContext.Current.CancellationToken));
+            await Task.WhenAll(workers);
+            await activity.FlushHistoryAsync();
+            var expected = activity.ChangesSince(-1)!.Recent;
+            Assert.Equal(SyncActivity.Capacity, expected.Length);
+            Assert.Equal(expected, new SyncActivity(directory.FullName).ChangesSince(-1)!.Recent);
+        }
+        finally
+        {
+            directory.Delete(true);
+        }
+    }
+
+    [Fact]
     public void TrayShowsActivityDuringRetryUntilThePassFinishes()
     {
         var activity = new SyncActivity();

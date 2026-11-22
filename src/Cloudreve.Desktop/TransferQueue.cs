@@ -44,13 +44,24 @@ internal sealed class TransferQueue(string directory)
     private const string Manifest = "pending.json";
     private QueuedFile[] entries = [];
     private Dictionary<string, QueuedFile> byKey = [];
+    private Dictionary<Guid, QueuedFile> byId = [];
+    private readonly HashSet<string> queuedPaths = new(StringComparer.OrdinalIgnoreCase);
+    private MacFile.ContentVersion? manifestVersion;
+    private bool needsCleanup = true;
 
     internal IReadOnlyList<QueuedFile> Entries { get { return entries; } }
+    internal IReadOnlyDictionary<string, QueuedFile> ByKey { get { return byKey; } }
 
-    internal static TransferQueue Open(string directory)
+    internal static TransferQueue Open(string directory, TransferQueue? cached = null)
     {
+        string path = Path.Combine(directory, Manifest);
+        var version = MacFile.GetContentVersion(path);
+        if (version.HasValue && cached != null && cached.manifestVersion == version && cached.DirectoryPath == directory)
+        {
+            return cached;
+        }
         var queue = new TransferQueue(directory);
-        var saved = ReadCache(Path.Combine(directory, Manifest), DesktopJson.Default.QueuedFileArray) ?? [];
+        var saved = ReadCache(path, DesktopJson.Default.QueuedFileArray) ?? [];
         var ids = new HashSet<Guid>();
         var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in saved)
@@ -63,7 +74,26 @@ internal sealed class TransferQueue(string directory)
         }
 
         queue.SetEntries(saved);
+        queue.manifestVersion = version;
         return queue;
+    }
+
+    private string DirectoryPath { get { return directory; } }
+
+    internal List<QueuedFile> VerifiedEntries()
+    {
+        var verified = new List<QueuedFile>();
+        if (entries.Length > 0)
+        {
+            foreach (string path in Directory.EnumerateFileSystemEntries(directory, "*.verified"))
+            {
+                if (Guid.TryParseExact(Path.GetFileNameWithoutExtension(path), "N", out var id) && byId.TryGetValue(id, out var entry))
+                {
+                    verified.Add(entry);
+                }
+            }
+        }
+        return verified;
     }
 
     internal static bool IsSafeKey(string? key)
@@ -84,10 +114,10 @@ internal sealed class TransferQueue(string directory)
         }
     }
 
-    internal bool RestoreVerified(Dictionary<string, FileBaseline> baseline, PairIgnoreRules rules)
+    internal bool RestoreVerified(IEnumerable<QueuedFile> verified, Dictionary<string, FileBaseline> baseline, PairIgnoreRules rules)
     {
         bool changed = false;
-        foreach (var entry in entries)
+        foreach (var entry in verified)
         {
             var job = entry.File;
             baseline.TryGetValue(job.Key, out var previous);
@@ -138,8 +168,17 @@ internal sealed class TransferQueue(string directory)
         }
     }
 
-    internal QueuedFile[] Reconcile(List<FileTransfer> pending, Func<string, bool>? isDeferred = null)
+    internal QueuedFile[] Reconcile(List<FileTransfer> pending, Func<string, bool>? isDeferred = null, PairScanScope? scope = null)
     {
+        if (needsCleanup)
+        {
+            ReapAbandonedFiles();
+            needsCleanup = false;
+        }
+        if (pending.Count == 0 && scope != null && !scope.Targets.Any(queuedPaths.Contains))
+        {
+            return [];
+        }
         // Only fresh scan results may run. Preserve the position and checkpoints of exact matches.
         var remaining = pending.ToDictionary(file => file.Key);
         var next = new List<QueuedFile>(pending.Count);
@@ -169,20 +208,22 @@ internal sealed class TransferQueue(string directory)
         }
 
         Save(next.ToArray());
+        return isDeferred == null ? entries : entries.Where(entry => !isDeferred(entry.File.Key)).ToArray();
+    }
+
+    private void ReapAbandonedFiles()
+    {
         // Also reap checkpoints left behind by a crash between publishing the manifest and cleanup.
-        var live = entries.Select(entry => entry.Id).ToHashSet();
         foreach (string path in Directory.EnumerateFiles(directory))
         {
             string stem = Path.GetFileNameWithoutExtension(path);
             bool abandonedWrite = Guid.TryParseExact(Path.GetExtension(path).TrimStart('.'), "N", out _) &&
                 (stem == Manifest || Path.GetExtension(stem) is ".upload" or ".download" or ".verified");
-            if (abandonedWrite || Guid.TryParseExact(stem, "N", out var id) && !live.Contains(id))
+            if (abandonedWrite || Guid.TryParseExact(stem, "N", out var id) && !byId.ContainsKey(id))
             {
                 File.Delete(path);
             }
         }
-
-        return isDeferred == null ? entries : entries.Where(entry => !isDeferred(entry.File.Key)).ToArray();
     }
 
     internal void Complete(HashSet<string> keys)
@@ -205,6 +246,7 @@ internal sealed class TransferQueue(string directory)
             }
 
             SetEntries(next);
+            manifestVersion = MacFile.GetContentVersion(Path.Combine(directory, Manifest));
         }
     }
 
@@ -212,6 +254,18 @@ internal sealed class TransferQueue(string directory)
     {
         entries = next;
         byKey = entries.ToDictionary(entry => entry.File.Key);
+        byId = entries.ToDictionary(entry => entry.Id);
+        queuedPaths.Clear();
+        foreach (var entry in entries)
+        {
+            for (string? path = entry.File.Key; !string.IsNullOrEmpty(path); path = Path.GetDirectoryName(path))
+            {
+                if (!queuedPaths.Add(path))
+                {
+                    break;
+                }
+            }
+        }
     }
 
     internal QueuedFile? Find(string key)

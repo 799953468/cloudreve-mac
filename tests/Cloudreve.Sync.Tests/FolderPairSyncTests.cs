@@ -57,6 +57,47 @@ public sealed class FolderPairSyncTests : IDisposable
     }
 
     [Fact]
+    public void IdentityBatchFindsAnOutsideAliasAfterTheFirstBatch()
+    {
+        var local = new PairInventory();
+        var remote = new PairInventory();
+        var included = new Dictionary<string, FileBaseline>();
+        for (int i = 0; i < 520; i++)
+        {
+            string key = $"folder/{i}";
+            string id = $"id-{i}";
+            included.Add(key, new FileBaseline("hash", "v1", id, id));
+            local.Nodes.Add(key, new PairNode(key, NodeKind.File, LocalId: id));
+            remote.Nodes.Add(key, new PairNode(key, NodeKind.File, Remote: new DriveEntry(key, Root + "/" + key, false, 1, "v1", Id: id)));
+        }
+        using (var db = store.OpenBaseline(pair))
+        {
+            db.SaveChanges([], included);
+            Assert.False(db.HasOutsideIdentity(included, local, remote));
+            db.SaveChanges([], new Dictionary<string, FileBaseline> { ["outside"] = new FileBaseline("hash", "v1", null, "id-519") });
+            Assert.True(db.HasOutsideIdentity(included, local, remote));
+        }
+    }
+
+    [Fact]
+    public void ReopeningCachedQueueSeesAnotherWritersManifestAndOnlyLiveReceipts()
+    {
+        string path = store.TransferDirectory(pair);
+        var first = TransferQueue.Open(path);
+        var old = Assert.Single(first.Reconcile([new FileTransfer("old/file", SyncAction.Upload, null, null, null)]));
+        var other = TransferQueue.Open(path);
+        var fresh = Assert.Single(other.Reconcile([new FileTransfer("new/file", SyncAction.Download, null, null, null)]));
+        File.WriteAllText(first.Files(old).VerifiedPath, "{}");
+        File.WriteAllText(other.Files(fresh).VerifiedPath, "{}");
+        var reopened = TransferQueue.Open(path, first);
+        Assert.Equal(fresh, Assert.Single(reopened.VerifiedEntries()));
+        Assert.Empty(reopened.Reconcile([], key => !key.StartsWith("old/", StringComparison.Ordinal), new PairScanScope(["old"])));
+        Assert.Equal(fresh, Assert.Single(reopened.Entries));
+        Assert.Empty(reopened.Reconcile([], key => !key.StartsWith("new/", StringComparison.Ordinal), new PairScanScope(["new"])));
+        Assert.Empty(reopened.Entries);
+    }
+
+    [Fact]
     public void LegacyJsonMigrationRollsBackAndPreservesUnicodeScopedEntries()
     {
         string name = Path.Combine(Path.GetDirectoryName(store.TransferDirectory(pair))!, pair.Marker.ToString("N") + ".json");

@@ -27,6 +27,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
     private readonly AdaptiveWorkQueue localScan = new();
     private readonly AdaptiveWorkQueue remoteScan = new();
     private readonly AdaptiveWorkQueue transfers = new();
+    private TransferQueue? cachedQueue;
 
     internal async Task<PairSyncResult> RunAsync(CancellationToken cancel, PairScanAttempt? attempt = null, PairScanScope? scope = null)
     {
@@ -43,14 +44,16 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
             try
             {
                 FolderPairStore.Verify(pair);
-                queue = TransferQueue.Open(store.TransferDirectory(pair));
+                queue = TransferQueue.Open(store.TransferDirectory(pair), cachedQueue);
+                cachedQueue = queue;
                 rules = new PairIgnoreRules(store.ReadRules(pair));
                 // A worker can finish before the coordinator gets to commit the batch baseline.
-                if (queue.Entries.Count > 0)
+                var verified = queue.VerifiedEntries();
+                if (verified.Count > 0)
                 {
-                    var queued = database.ReadPaths(queue.Entries.Select(entry => entry.File.Key));
+                    var queued = database.ReadPaths(verified.Select(entry => entry.File.Key));
                     var restored = new Dictionary<string, FileBaseline>(queued);
-                    if (queue.RestoreVerified(restored, rules))
+                    if (queue.RestoreVerified(verified, restored, rules))
                     {
                         attempt.Stage = "RestoreVerifiedTransfers";
                         await VerifyRemoteRootAsync(cancel);
@@ -229,8 +232,8 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
 
                 attempt.Stage = "TransferFiles";
                 var work = queue.Reconcile(pending, scope == null && deferred.Count == 0 ? null :
-                    key => (scope != null && !scope.Covers(key)) || BlockedPath(deferred, key));
-                activity?.SetPending(queue.Entries);
+                    key => (scope != null && !scope.Covers(key)) || BlockedPath(deferred, key), scope);
+                activity?.SetPending(queue);
                 await transfers.RunAsync(work, (entry, token) => TransferFileAsync(entry.File, queue.Files(entry), token), completed =>
                 {
                     var item = completed.Item;
@@ -303,7 +306,11 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                 }
 
                 queue.Complete(finished);
-                activity?.SetPending(queue.Entries);
+                activity?.SetPending(queue);
+                if (activity != null)
+                {
+                    await activity.FlushHistoryAsync();
+                }
                 attempt.Stage = previousStage;
             }
 

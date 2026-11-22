@@ -7,25 +7,40 @@ internal sealed partial class FolderPairSync
     private async Task<bool> ApplyFileMovesAsync(PairInventory local, PairInventory remote, Dictionary<string, FileBaseline> baseline,
         PairIgnoreRules rules, HashSet<string> conflicts, HashSet<string> blocked, CancellationToken cancel)
     {
-        var localIds = local.Nodes.Values.Where(node => node.LocalId != null).ToLookup(node => node.LocalId!);
-        var remoteIds = remote.Nodes.Values.Where(node => node.Remote?.Id != null).ToLookup(node => node.Remote!.Id!);
-        var knownLocal = baseline.Values.ToLookup(entry => entry.LocalId);
-        var knownRemote = baseline.Values.ToLookup(entry => entry.RemoteId);
-        bool changed = false;
-        foreach (var (oldKey, previous) in baseline.ToArray())
+        var localPaths = PathsByIdentity(local, node => node.LocalId);
+        var remotePaths = PathsByIdentity(remote, node => node.Remote?.Id);
+        var candidates = new List<KeyValuePair<string, FileBaseline>>();
+        foreach (var entry in baseline)
         {
             cancel.ThrowIfCancellationRequested();
-            if (previous.IsDirectory || rules.Excludes(oldKey) || previous.LocalId == null || string.IsNullOrEmpty(previous.RemoteId))
+            var previous = entry.Value;
+            if (previous.IsDirectory || previous.LocalId == null || string.IsNullOrEmpty(previous.RemoteId))
             {
                 continue;
             }
+            if ((localPaths.TryGetValue(previous.LocalId, out string? leftPath) && leftPath != entry.Key ||
+                remotePaths.TryGetValue(previous.RemoteId, out string? rightPath) && rightPath != entry.Key) && !rules.Excludes(entry.Key))
+            {
+                candidates.Add(entry);
+            }
+        }
+        if (candidates.Count == 0)
+        {
+            return false;
+        }
 
+        var wantedLocal = candidates.Select(entry => entry.Value.LocalId).ToHashSet();
+        var wantedRemote = candidates.Select(entry => entry.Value.RemoteId).ToHashSet();
+        var localIds = local.Nodes.Values.Where(node => wantedLocal.Contains(node.LocalId)).ToLookup(node => node.LocalId);
+        var remoteIds = remote.Nodes.Values.Where(node => wantedRemote.Contains(node.Remote?.Id)).ToLookup(node => node.Remote!.Id);
+        var knownLocal = baseline.Values.Where(entry => wantedLocal.Contains(entry.LocalId)).ToLookup(entry => entry.LocalId);
+        var knownRemote = baseline.Values.Where(entry => wantedRemote.Contains(entry.RemoteId)).ToLookup(entry => entry.RemoteId);
+        bool changed = false;
+        foreach (var (oldKey, previous) in candidates)
+        {
+            cancel.ThrowIfCancellationRequested();
             var left = localIds[previous.LocalId].ToArray();
             var right = remoteIds[previous.RemoteId].ToArray();
-            if (!left.Concat(right).Any(node => node.Key != oldKey))
-            {
-                continue;
-            }
 
             // Never let a failed match fall through to the ordinary delete/create decisions.
             var involved = left.Concat(right).Select(node => node.Key).Append(oldKey).Distinct().ToArray();
@@ -125,6 +140,21 @@ internal sealed partial class FolderPairSync
         }
 
         return changed;
+    }
+
+    private static Dictionary<string, string?> PathsByIdentity(PairInventory inventory, Func<PairNode, string?> identity)
+    {
+        var paths = new Dictionary<string, string?>(inventory.Nodes.Count);
+        foreach (var node in inventory.Nodes.Values)
+        {
+            string? id = identity(node);
+            if (id != null && !paths.TryAdd(id, node.Key))
+            {
+                // A duplicate, even at the original path, needs the full ambiguity checks.
+                paths[id] = null;
+            }
+        }
+        return paths;
     }
 
     private static bool SafeMovePath(PairInventory inventory, string key)

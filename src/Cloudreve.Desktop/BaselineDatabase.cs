@@ -167,17 +167,17 @@ internal sealed class BaselineDatabase : IDisposable
 
     internal bool HasOutsideIdentity(Dictionary<string, FileBaseline> included, PairInventory local, PairInventory remote)
     {
-        return HasOutside("SELECT path FROM files WHERE localId = $id", local.Nodes.Values.Select(node => node.LocalId)) ||
-            HasOutside("SELECT path FROM files WHERE remoteId = $id", remote.Nodes.Values.Select(node => node.Remote?.Id));
+        return HasOutside("SELECT path FROM files WHERE localId IN (SELECT value FROM json_each($ids))", local.Nodes.Values.Select(node => node.LocalId)) ||
+            HasOutside("SELECT path FROM files WHERE remoteId IN (SELECT value FROM json_each($ids))", remote.Nodes.Values.Select(node => node.Remote?.Id));
 
         bool HasOutside(string sql, IEnumerable<string?> ids)
         {
             using (var command = Command(sql))
             {
-                var id = command.Parameters.Add("$id", SqliteType.Text);
-                foreach (string value in ids.OfType<string>().Distinct())
+                var parameter = command.Parameters.Add("$ids", SqliteType.Text);
+                foreach (var batch in ids.OfType<string>().Distinct().Chunk(512))
                 {
-                    id.Value = value;
+                    parameter.Value = JsonSerializer.Serialize(batch, DesktopJson.Default.StringArray);
                     using (var reader = command.ExecuteReader())
                     {
                         while (reader.Read())

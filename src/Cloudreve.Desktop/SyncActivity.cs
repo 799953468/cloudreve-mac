@@ -34,12 +34,17 @@ internal sealed class SyncActivity
     {
         internal readonly HashSet<SyncActivity> Active = [];
         internal readonly Queue<ActivityEntry> Recent = new();
-        internal readonly LinkedList<WaitingFile> Waiting = new();
-        internal readonly Dictionary<string, LinkedListNode<WaitingFile>> WaitingByKey = new(StringComparer.Ordinal);
+        internal IReadOnlyList<QueuedFile> Pending = [];
+        internal IReadOnlyDictionary<string, QueuedFile> PendingByKey = new Dictionary<string, QueuedFile>();
+        internal readonly HashSet<string> StartedKeys = new(StringComparer.Ordinal);
+        internal int FirstWaiting;
         internal ScanStatus Scan;
         internal TrayState PendingTrayState;
         internal bool StartedSyncWork;
         internal string? HistoryPath;
+        internal Task? HistoryWriter;
+        internal TaskCompletionSource? FlushRequested;
+        internal bool HistoryDirty;
         internal long Revision;
     }
 
@@ -63,21 +68,32 @@ internal sealed class SyncActivity
             }
         }
 
-        SetPending(TransferQueue.Open(directory).Entries);
+        SetPending(TransferQueue.Open(directory));
     }
 
     internal void SetPending(IReadOnlyList<QueuedFile> entries)
     {
+        SetPending(entries, entries.ToDictionary(entry => entry.File.Key));
+    }
+
+    internal void SetPending(TransferQueue queue)
+    {
+        SetPending(queue.Entries, queue.ByKey);
+    }
+
+    private void SetPending(IReadOnlyList<QueuedFile> entries, IReadOnlyDictionary<string, QueuedFile> byKey)
+    {
         lock (state)
         {
-            state.Waiting.Clear();
-            state.WaitingByKey.Clear();
-            foreach (var entry in entries)
+            if (ReferenceEquals(state.Pending, entries) && state.StartedKeys.Count == 0)
             {
-                var file = new WaitingFile(entry.File.Key, entry.File.Action);
-                state.WaitingByKey.Add(file.Key, state.Waiting.AddLast(file));
+                return;
             }
-
+            // The queue publishes new arrays and indexes together. Workers only mark started keys.
+            state.Pending = entries;
+            state.PendingByKey = byKey;
+            state.StartedKeys.Clear();
+            state.FirstWaiting = 0;
             state.Revision++;
         }
     }
@@ -153,9 +169,12 @@ internal sealed class SyncActivity
         lock (state)
         {
             current = new ActivityEntry(DateTime.Now, operation, key, UiText.Get("处理中"));
-            if (state.WaitingByKey.Remove(key, out var waiting))
+            if (state.PendingByKey.ContainsKey(key) && state.StartedKeys.Add(key))
             {
-                state.Waiting.Remove(waiting);
+                while (state.FirstWaiting < state.Pending.Count && state.StartedKeys.Contains(state.Pending[state.FirstWaiting].File.Key))
+                {
+                    state.FirstWaiting++;
+                }
             }
 
             state.Active.Add(this);
@@ -181,13 +200,11 @@ internal sealed class SyncActivity
             state.Recent.Enqueue(current with { Time = DateTime.Now, Status = status });
             if (state.HistoryPath != null)
             {
-                try
+                state.HistoryDirty = true;
+                if (state.HistoryWriter == null)
                 {
-                    FolderPairStore.WriteJson(state.HistoryPath, state.Recent.ToArray(), DesktopJson.Default.ActivityEntryArray);
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    Log.Logger.WriteFailure(LogEventLevel.Warning, "Save recent activity", ex);
+                    state.FlushRequested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    state.HistoryWriter = Task.Run(WriteHistoryAsync);
                 }
             }
 
@@ -195,6 +212,51 @@ internal sealed class SyncActivity
             current = null;
             state.Active.Remove(this);
             state.Revision++;
+        }
+    }
+
+    internal Task FlushHistoryAsync()
+    {
+        lock (state)
+        {
+            state.FlushRequested?.TrySetResult();
+            return state.HistoryWriter ?? Task.CompletedTask;
+        }
+    }
+
+    private async Task WriteHistoryAsync()
+    {
+        Task flush;
+        lock (state)
+        {
+            flush = state.FlushRequested!.Task;
+        }
+        while (true)
+        {
+            await Task.WhenAny(flush, Task.Delay(100)).ConfigureAwait(false);
+            ActivityEntry[] snapshot;
+            lock (state)
+            {
+                snapshot = state.Recent.ToArray();
+                state.HistoryDirty = false;
+            }
+            try
+            {
+                FolderPairStore.WriteJson(state.HistoryPath!, snapshot, DesktopJson.Default.ActivityEntryArray);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Log.Logger.WriteFailure(LogEventLevel.Warning, "Save recent activity", ex);
+            }
+            lock (state)
+            {
+                if (!state.HistoryDirty)
+                {
+                    state.HistoryWriter = null;
+                    state.FlushRequested = null;
+                    return;
+                }
+            }
         }
     }
 
@@ -277,7 +339,17 @@ internal sealed class SyncActivity
             }
 
             var active = state.Active.Select(worker => new ActiveFile(worker.current!, worker.transfer)).ToArray();
-            return new ActivitySnapshot(state.Revision, active, state.Recent.Reverse().ToArray(), state.Waiting.Take(Capacity).ToArray(), state.Waiting.Count, state.Scan);
+            int waitingCount = state.Pending.Count - state.StartedKeys.Count;
+            var waiting = new List<WaitingFile>(Math.Min(waitingCount, Capacity));
+            for (int i = state.FirstWaiting; i < state.Pending.Count && waiting.Count < Capacity; i++)
+            {
+                var file = state.Pending[i].File;
+                if (!state.StartedKeys.Contains(file.Key))
+                {
+                    waiting.Add(new WaitingFile(file.Key, file.Action));
+                }
+            }
+            return new ActivitySnapshot(state.Revision, active, state.Recent.Reverse().ToArray(), waiting.ToArray(), waitingCount, state.Scan);
         }
     }
 }

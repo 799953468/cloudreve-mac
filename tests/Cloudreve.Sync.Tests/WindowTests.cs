@@ -220,6 +220,7 @@ public sealed class WindowTests : IDisposable
                     var activity = new SyncActivity(cache);
                     activity.Start("下载", "second.txt");
                     activity.Finish("完成");
+                    await activity.FlushHistoryAsync();
                     transport.HoldListingFor = account.DriveId;
                 }
             }
@@ -254,9 +255,14 @@ public sealed class WindowTests : IDisposable
                 Assert.Equal("等待传输（3）", popup.WaitingTitle.Text);
                 Assert.False(popup.WaitingMore.IsVisible);
                 var rows = popup.WaitingItems.ItemsSource;
+                var activeRow = Assert.Single(popup.ActiveRows.Children);
+                var recentRow = Assert.Single(popup.RecentRows.Children);
                 work.Activity.ReportBytes(200);
                 popup.Refresh();
                 Assert.Same(rows, popup.WaitingItems.ItemsSource);
+                Assert.Same(activeRow, Assert.Single(popup.ActiveRows.Children));
+                Assert.Same(recentRow, Assert.Single(popup.RecentRows.Children));
+                Assert.Equal(200, Assert.Single(activeRow.GetVisualDescendants().OfType<ProgressBar>()).Value);
                 Capture(popup, dark ? "activity-dark" : "activity");
                 Click(Assert.IsType<Button>(popup.Chips.Children[1]));
                 Assert.False(popup.WaitingSection.IsVisible);

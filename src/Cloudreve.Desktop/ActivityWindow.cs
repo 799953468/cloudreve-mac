@@ -67,6 +67,38 @@ internal sealed partial class ActivityWindow : Window
     private WaitingRow[] displayedWaiting = [];
     private MountedDrive? selected;
 
+    private sealed class ActivityRow(MountedDrive drive, ActivityEntry entry) : Grid
+    {
+        internal MountedDrive Drive { get; } = drive;
+        internal ActivityEntry Entry { get; } = entry;
+        internal TextBlock? Detail { get; set; }
+        internal ProgressBar? Progress { get; set; }
+        private DateTime nextTimeUpdate;
+
+        internal void Update(ActivityTransfer? transfer)
+        {
+            if (Detail == null)
+            {
+                return;
+            }
+            if (Progress != null)
+            {
+                Detail.Text = transfer == null ? DesktopText.Get("popup.processing") :
+                    $"{DesktopFiles.Bytes(transfer.Completed)} / {DesktopFiles.Bytes(transfer.Total)} - {DesktopFiles.Bytes(transfer.BytesPerSecond)}/s";
+                Progress.Maximum = Math.Max(1, transfer?.Total ?? 1);
+                Progress.Value = transfer?.Completed ?? 0;
+                Progress.IsIndeterminate = transfer == null;
+            }
+            else if (DateTime.Now >= nextTimeUpdate)
+            {
+                Detail.Text = (Entry.Status == UiText.Get("失败") ? Entry.Status : RelativeTime(Entry.Time)) + " · ";
+                var now = DateTime.Now;
+                long ageTicks = Math.Max(0, (now - Entry.Time).Ticks);
+                nextTimeUpdate = now.AddTicks(TimeSpan.TicksPerMinute - ageTicks % TimeSpan.TicksPerMinute);
+            }
+        }
+    }
+
     internal ActivityWindow(WorkspaceHost host)
     {
         this.host = host;
@@ -156,6 +188,10 @@ internal sealed partial class ActivityWindow : Window
 
         if (!changed)
         {
+            foreach (ActivityRow row in RecentRows.Children)
+            {
+                row.Update(null);
+            }
             return;
         }
 
@@ -178,11 +214,7 @@ internal sealed partial class ActivityWindow : Window
         }
 
         ActiveSection.IsVisible = active.Length > 0;
-        ActiveRows.Children.Clear();
-        foreach (var (drive, file) in active)
-        {
-            ActiveRows.Children.Add(Row(drive, file.Entry, true, file.Transfer));
-        }
+        UpdateRows(ActiveRows, active.Select(item => (item.Drive, item.File.Entry, item.File.Transfer)), active: true);
 
         WaitingSection.IsVisible = waitingCount > 0;
         WaitingTitle.Text = waitingLabel;
@@ -199,11 +231,7 @@ internal sealed partial class ActivityWindow : Window
         WaitingMore.Text = remaining > 0 ? DesktopText.Get("popup.queuedMore").Replace("{{count}}", remaining.ToString()) : null;
 
         RecentSection.IsVisible = recent.Length > 0;
-        RecentRows.Children.Clear();
-        foreach (var (drive, entry) in recent)
-        {
-            RecentRows.Children.Add(Row(drive, entry, false, null));
-        }
+        UpdateRows(RecentRows, recent.Select(item => (item.Drive, item.Entry, (ActivityTransfer?)null)), active: false);
 
         bool showFailure = active.Length == 0 && !scanning && scans.Length > 0;
         Footer.Text = active.Length switch
@@ -220,9 +248,47 @@ internal sealed partial class ActivityWindow : Window
         StatusIcon.Classes.Set("healthy", idle);
     }
 
-    private Grid Row(MountedDrive drive, ActivityEntry entry, bool active, ActivityTransfer? transfer)
+    private void UpdateRows(StackPanel panel, IEnumerable<(MountedDrive Drive, ActivityEntry Entry, ActivityTransfer? Transfer)> items, bool active)
     {
-        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("32,*"), ColumnSpacing = 8, Margin = new Thickness(16, 12) };
+        int index = 0;
+        foreach (var (drive, entry, transfer) in items)
+        {
+            int match = index;
+            while (match < panel.Children.Count)
+            {
+                var existing = (ActivityRow)panel.Children[match];
+                if (existing.Drive == drive && ReferenceEquals(existing.Entry, entry))
+                {
+                    break;
+                }
+                match++;
+            }
+            ActivityRow row;
+            if (match == panel.Children.Count)
+            {
+                row = Row(drive, entry, active);
+                panel.Children.Insert(index, row);
+            }
+            else
+            {
+                row = (ActivityRow)panel.Children[match];
+                if (match != index)
+                {
+                    panel.Children.Move(match, index);
+                }
+            }
+            row.Update(transfer);
+            index++;
+        }
+        while (panel.Children.Count > index)
+        {
+            panel.Children.RemoveAt(panel.Children.Count - 1);
+        }
+    }
+
+    private ActivityRow Row(MountedDrive drive, ActivityEntry entry, bool active)
+    {
+        var row = new ActivityRow(drive, entry) { ColumnDefinitions = new ColumnDefinitions("32,*"), ColumnSpacing = 8, Margin = new Thickness(16, 12) };
         var file = new PathIcon
         {
             Width = 22, Height = 26, Classes = { active ? "activityInk" : "mutedIcon" },
@@ -235,25 +301,20 @@ internal sealed partial class ActivityWindow : Window
         lines.Children.Add(new TextBlock { Text = Path.GetFileName(entry.Key), TextTrimming = TextTrimming.CharacterEllipsis, FontWeight = FontWeight.Medium, LineHeight = 20 });
         if (active)
         {
-            lines.Children.Add(new TextBlock
-            {
-                Classes = { "secondary" }, FontSize = 12, LineHeight = 18,
-                Text = transfer == null
-                    ? DesktopText.Get("popup.processing")
-                    : $"{DesktopFiles.Bytes(transfer.Completed)} / {DesktopFiles.Bytes(transfer.Total)} - {DesktopFiles.Bytes(transfer.BytesPerSecond)}/s"
-            });
-            lines.Children.Add(new ProgressBar
-                { Classes = { "syncProgress" }, Height = 4, Minimum = 0, Maximum = Math.Max(1, transfer?.Total ?? 1), Value = transfer?.Completed ?? 0, IsIndeterminate = transfer == null });
+            row.Detail = new TextBlock { Classes = { "secondary" }, FontSize = 12, LineHeight = 18 };
+            row.Progress = new ProgressBar { Classes = { "syncProgress" }, Height = 4, Minimum = 0 };
+            lines.Children.Add(row.Detail);
+            lines.Children.Add(row.Progress);
         }
         else if (drive.Pair != null)
         {
             var path = Path.Combine(drive.Pair.Local, entry.Key);
             var line = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = 3 };
-            line.Children.Add(new TextBlock
+            row.Detail = new TextBlock
             {
-                Classes = { "secondary" }, FontSize = 12, LineHeight = 18, VerticalAlignment = VerticalAlignment.Center,
-                Text = (entry.Status == UiText.Get("失败") ? entry.Status : RelativeTime(entry.Time)) + " · "
-            });
+                Classes = { "secondary" }, FontSize = 12, LineHeight = 18, VerticalAlignment = VerticalAlignment.Center
+            };
+            line.Children.Add(row.Detail);
             var folderName = Path.GetFileName(Path.GetDirectoryName(path));
             var link = new Button
             {
