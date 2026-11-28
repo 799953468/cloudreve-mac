@@ -53,7 +53,7 @@ internal sealed class PairInventory
         FolderPairStore.CheckDirectory(Path.GetDirectoryName(path)!);
         if (LocalFile.Inspect(path) != NodeKind.File)
         {
-            throw new IOException(UiText.Get("文件在同步期间已变化。"));
+            throw new LocalFileChangedException(UiText.Get("文件在同步期间已变化。"));
         }
 
         using (var input = File.OpenRead(path))

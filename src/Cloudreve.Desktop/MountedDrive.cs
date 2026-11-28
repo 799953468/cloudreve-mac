@@ -102,20 +102,24 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
     private async Task ScanAsync(FolderPairSync engine, PairWake signal, ILogger logger, CancellationToken cancel)
     {
         PairScanScope? scope = null;
+        string? fullReason = "Startup";
         try
         {
             while (!cancel.IsCancellationRequested)
             {
                 bool retry = false;
-                var attempt = new PairScanAttempt();
+                var attempt = new PairScanAttempt { FullReason = scope == null ? fullReason : null };
+                PairScanScope? retryScope = null;
                 try
                 {
                     runningPass = true;
                     var result = await Task.Run(() => engine.RunAsync(cancel, attempt, scope), cancel);
                     remoteUnavailable = false;
-                    retry = result.DeferredDirectories > 0;
-                    logger.ForContext("ScanScope", attempt.Scope == null ? "Full" : "Paths").Debug("Folder pair scan finished in {ElapsedMs} ms: {Uploaded} uploaded, {Downloaded} downloaded, {Removed} removed, {Conflicts} conflicts, {DeferredDirectories} directories deferred",
-                        attempt.ElapsedMs, result.Uploaded, result.Downloaded, result.Removed, result.Conflicts.Count, result.DeferredDirectories);
+                    // The pass finished everything else, so even after a full scan only the deferred paths need another look.
+                    retry = result.DeferredPaths is { Count: > 0 };
+                    retryScope = retry ? new PairScanScope(result.DeferredPaths!) : null;
+                    logger.ForContext("ScanScope", attempt.Scope == null ? "Full" : "Paths").ForContext("FullScanReason", attempt.Scope == null ? attempt.FullReason : null).Debug("Folder pair scan finished in {ElapsedMs} ms: {Uploaded} uploaded, {Downloaded} downloaded, {Removed} removed, {Conflicts} conflicts, {DeferredDirectories} directories deferred, {DeferredFiles} files deferred",
+                        attempt.ElapsedMs, result.Uploaded, result.Downloaded, result.Removed, result.Conflicts.Count, result.DeferredDirectories, result.DeferredFiles);
                     if (Program.Preferences.Current.ConflictAlerts && result.Conflicts.Any(key => !conflicts.Contains(key)))
                     {
                         Notice?.Invoke(UiText.Get("同步冲突"));
@@ -127,6 +131,7 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
                 catch (Exception ex) when (!cancel.IsCancellationRequested)
                 {
                     retry = true;
+                    retryScope = attempt.Scope;
                     if (ex is HttpRequestException request)
                     {
                         remoteUnavailable = request.StatusCode == null || (int)request.StatusCode >= 500;
@@ -137,6 +142,7 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
                     }
                     CheckExpiry(ex);
                     logger.ForContext("Stage", attempt.Stage).ForContext("ElapsedMs", attempt.ElapsedMs)
+                        .ForContext("ScanScope", attempt.Scope == null ? "Full" : "Paths").ForContext("FullScanReason", attempt.Scope == null ? attempt.FullReason : null)
                         .WriteFailure(LogEventLevel.Warning, "Synchronize folder pair", ex);
                 }
                 finally
@@ -144,7 +150,8 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
                     runningPass = false;
                 }
 
-                scope = await signal.WaitForNextScanAsync(retry, cancel, attempt.Scope);
+                scope = await signal.WaitForNextScanAsync(retry, cancel, retryScope);
+                fullReason = signal.LastFullReason;
             }
         }
         catch (Exception) when (cancel.IsCancellationRequested)
@@ -157,7 +164,7 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
         if (Pair != null)
         {
             PairStore.SaveRules(Pair, text);
-            wake?.Signal();
+            wake?.Signal("IgnoreRulesChanged");
         }
     }
 

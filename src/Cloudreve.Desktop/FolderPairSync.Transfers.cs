@@ -2,7 +2,7 @@ namespace Cloudreve.Desktop;
 
 internal sealed partial class FolderPairSync
 {
-    private sealed record CompletedTransfer(FileTransfer Item, FileBaseline? Baseline);
+    private sealed record CompletedTransfer(FileTransfer Item, FileBaseline? Baseline, bool Deferred = false);
 
     private static bool MatchesPreviousVersion(DriveEntry placeholder, DriveEntry? previous)
     {
@@ -120,6 +120,12 @@ internal sealed partial class FolderPairSync
         {
             progress?.Finish(UiText.Get("已取消"));
             throw;
+        }
+        catch (LocalFileChangedException)
+        {
+            // Failing the pass would restart its whole scan; a file that is still being written could repeat that indefinitely.
+            progress?.Finish(UiText.Get("已变化，稍后重试"));
+            return new CompletedTransfer(item, null, Deferred: true);
         }
         catch
         {

@@ -12,6 +12,7 @@ internal sealed class PairWake(TimeSpan pollInterval)
     private readonly object gate = new();
     private readonly HashSet<string> pending = new(StringComparer.OrdinalIgnoreCase);
     private bool full;
+    private string? fullReason;
     private bool remoteCatchUp;
     private long lastFull = Stopwatch.GetTimestamp();
     private readonly Channel<bool> signals = Channel.CreateBounded<bool>(1);
@@ -22,11 +23,14 @@ internal sealed class PairWake(TimeSpan pollInterval)
     {
     }
 
-    internal void Signal()
+    // Why the most recent scan returned by WaitForNextScanAsync covers the whole pair; null for a path scan.
+    internal string? LastFullReason { get; private set; }
+
+    internal void Signal(string reason = "Requested")
     {
         lock (gate)
         {
-            full = true;
+            RequestFull(reason);
             pending.Clear();
             signals.Writer.TryWrite(true);
         }
@@ -38,6 +42,16 @@ internal sealed class PairWake(TimeSpan pollInterval)
         {
             remoteCatchUp = true;
             signals.Writer.TryWrite(true);
+        }
+    }
+
+    // Caller holds the gate. The first reason wins because it is the one that forced the scan.
+    private void RequestFull(string reason)
+    {
+        if (!full)
+        {
+            full = true;
+            fullReason = reason;
         }
     }
 
@@ -72,14 +86,14 @@ internal sealed class PairWake(TimeSpan pollInterval)
 
                 if (!TransferQueue.IsSafeKey(path))
                 {
-                    full = true;
+                    RequestFull("UnsafeNotificationPath");
                     break;
                 }
 
                 pending.Add(path!.Normalize());
                 if (pending.Count > MaxPaths)
                 {
-                    full = true;
+                    RequestFull("TooManyChangedPaths");
                     break;
                 }
             }
@@ -106,7 +120,7 @@ internal sealed class PairWake(TimeSpan pollInterval)
             {
                 SignalPaths(retryScope.Targets);
             }
-            return TakeScope(retryScope == null || PollDue());
+            return TakeScope(retryScope == null ? "RetryAfterFailedFullScan" : PollDue() ? "Poll" : null);
         }
 
         while (true)
@@ -116,7 +130,7 @@ internal sealed class PairWake(TimeSpan pollInterval)
             bool poll = PollDue();
             if (signaled || poll)
             {
-                return TakeScope(poll);
+                return TakeScope(poll ? "Poll" : null);
             }
         }
     }
@@ -126,13 +140,14 @@ internal sealed class PairWake(TimeSpan pollInterval)
         return (!localAvailable || !remoteAvailable) && Stopwatch.GetElapsedTime(lastFull) >= pollInterval;
     }
 
-    private PairScanScope? TakeScope(bool forceFull)
+    private PairScanScope? TakeScope(string? forcedReason)
     {
         lock (gate)
         {
             signals.Reader.TryRead(out _);
             PairScanScope? scope = null;
-            if (forceFull || full || remoteCatchUp)
+            LastFullReason = full ? fullReason : forcedReason ?? (remoteCatchUp ? "RemoteCatchUp" : null);
+            if (LastFullReason != null)
             {
                 lastFull = Stopwatch.GetTimestamp();
             }
@@ -143,6 +158,7 @@ internal sealed class PairWake(TimeSpan pollInterval)
 
             pending.Clear();
             full = false;
+            fullReason = null;
             remoteCatchUp = false;
             return scope;
         }
@@ -194,7 +210,7 @@ internal sealed class PairWake(TimeSpan pollInterval)
                     localAvailable = false;
                 }
                 Log.Logger.WriteFailure(LogEventLevel.Warning, "Watch local changes; requesting a rescan", error.GetException());
-                Signal();
+                Signal(error.GetException() is InternalBufferOverflowException ? "LocalWatcherOverflow" : "LocalWatcherError");
             };
             localAvailable = true;
             watcher.EnableRaisingEvents = true;
@@ -283,7 +299,7 @@ internal sealed class PairWake(TimeSpan pollInterval)
             {
                 if (json.RootElement.ValueKind != JsonValueKind.Array || json.RootElement.GetArrayLength() > MaxPaths)
                 {
-                    Signal();
+                    Signal("UnrecognizedRemoteEvent");
                     return;
                 }
 
@@ -292,7 +308,7 @@ internal sealed class PairWake(TimeSpan pollInterval)
                     string? type = Field(item, "type");
                     if (type is not ("create" or "modify" or "delete" or "rename"))
                     {
-                        Signal();
+                        Signal("UnrecognizedRemoteEvent");
                         return;
                     }
 
@@ -306,7 +322,7 @@ internal sealed class PairWake(TimeSpan pollInterval)
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
-            Signal();
+            Signal("UnrecognizedRemoteEvent");
             return;
         }
 

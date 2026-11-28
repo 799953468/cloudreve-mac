@@ -141,12 +141,45 @@ public sealed class FolderPairSyncTests : IDisposable
         File.WriteAllText(path, "first");
         site.BeforeStorageAsync = (_, _) =>
         {
+            site.BeforeStorageAsync = null;
             File.WriteAllText(path, "other");
             return Task.CompletedTask;
         };
-        await Assert.ThrowsAsync<IOException>(() => RunAsync());
+        var result = await RunAsync();
+        Assert.Equal(0, result.Uploaded);
+        Assert.Equal(1, result.DeferredFiles);
+        Assert.Equal("doc", Assert.Single(result.DeferredPaths!));
         Assert.Empty(store.ReadBaseline(pair));
         Assert.Equal("other", File.ReadAllText(path));
+    }
+
+    [Fact]
+    public async Task LocalChangeDuringOneTransferDoesNotAbortTheOthers()
+    {
+        string busy = Path.Combine(pair.Local, "busy");
+        File.WriteAllText(busy, "first");
+        File.WriteAllText(Path.Combine(pair.Local, "steady"), "steady");
+        site.Put(Root + "/cloud", "cloud");
+        site.BeforeList = _ =>
+        {
+            site.BeforeList = null;
+            File.WriteAllText(busy, "still writing");
+        };
+
+        var result = await RunAsync();
+        Assert.Equal(1, result.Uploaded);
+        Assert.Equal(1, result.Downloaded);
+        Assert.Equal("busy", Assert.Single(result.DeferredPaths!));
+        Assert.Equal("steady", site.Files[Root + "/steady"].Text);
+        Assert.Equal("cloud", File.ReadAllText(Path.Combine(pair.Local, "cloud")));
+        Assert.DoesNotContain(Root + "/busy", site.Files.Keys);
+        Assert.DoesNotContain("busy", store.ReadBaseline(pair).Keys);
+
+        // Only the changed file needs another pass.
+        var retried = await RunAsync(scope: new PairScanScope(result.DeferredPaths!));
+        Assert.Equal(1, retried.Uploaded);
+        Assert.Empty(retried.DeferredPaths!);
+        Assert.Equal("still writing", site.Files[Root + "/busy"].Text);
     }
 
     [Fact]
@@ -831,7 +864,7 @@ public sealed class FolderPairSyncTests : IDisposable
         site.Put(Root + "/doc", "cloud");
         site.BeforeList = _ => File.WriteAllText(path, "local");
 
-        await Assert.ThrowsAsync<IOException>(() => RunAsync());
+        Assert.Equal("doc", Assert.Single((await RunAsync()).DeferredPaths!));
         Assert.Equal("local", File.ReadAllText(path));
         Assert.Equal("cloud", site.Files[Root + "/doc"].Text);
         Assert.Equal(baseline, store.ReadBaseline(pair)["doc"]);
@@ -1286,7 +1319,7 @@ public sealed class FolderPairSyncTests : IDisposable
         }
 
         var engine = new FolderPairSync(store, pair, new DriveClient(http, http, session, _ => { }));
-        await Assert.ThrowsAsync<IOException>(() => engine.ResolveConflictAsync(conflict, ConflictChoice.KeepRemote, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAnyAsync<IOException>(() => engine.ResolveConflictAsync(conflict, ConflictChoice.KeepRemote, TestContext.Current.CancellationToken));
         Assert.Equal(changeCloud ? "local" : "newer", File.ReadAllText(path));
         Assert.Equal(changeCloud ? "newer" : "cloud", site.Files[Root + "/doc"].Text);
     }

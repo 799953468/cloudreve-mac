@@ -154,6 +154,29 @@ public sealed class PairWakeTests
     }
 
     [Fact]
+    public async Task ReportsWhyAScanCoversTheWholePair()
+    {
+        var cancel = TestContext.Current.CancellationToken;
+        var wake = new PairWake();
+        wake.SignalPaths("edited");
+        Assert.NotNull(await wake.WaitForNextScanAsync(false, cancel));
+        Assert.Null(wake.LastFullReason);
+
+        wake.RequestRemoteCatchUp();
+        Assert.Null(await wake.WaitForNextScanAsync(false, cancel));
+        Assert.Equal("RemoteCatchUp", wake.LastFullReason);
+
+        wake.SignalPaths(Enumerable.Range(0, 1025).Select(i => "file" + i));
+        wake.Signal("IgnoreRulesChanged");
+        Assert.Null(await wake.WaitForNextScanAsync(false, cancel));
+        Assert.Equal("TooManyChangedPaths", wake.LastFullReason);
+
+        wake.SignalRemoteChanges("""[{"type":"restore","from":"/a"}]""");
+        Assert.Null(await wake.WaitForNextScanAsync(false, cancel));
+        Assert.Equal("UnrecognizedRemoteEvent", wake.LastFullReason);
+    }
+
+    [Fact]
     public async Task FailedPathScanRetriesOriginalAndNewEdits()
     {
         var temp = Directory.CreateTempSubdirectory();

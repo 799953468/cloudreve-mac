@@ -97,6 +97,7 @@
   "完成": "Done",
   "已取消": "Cancelled",
   "失败": "Failed",
+  "已变化，稍后重试": "Changed; will retry",
   "冲突": "Conflict",
   "核对内容": "Compare contents",
   "同步移动": "Sync move",

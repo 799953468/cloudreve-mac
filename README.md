@@ -76,11 +76,11 @@ On macOS 13 or later, turn on **Settings > General > Launch at startup** in `Clo
 
 Click the Cloudreve menu bar icon to see which drives are scanning. Each drive shows whether it is checking the local or cloud folder and how many items it has found on that side. A failed scan stays visible until the next attempt.
 
-After a successful pass, a drive with working local and cloud notifications waits for a change without periodically rescanning. If either watcher is unavailable, it polls after 30 seconds instead. A failed pass waits 30 seconds before retrying, even if more notifications arrive.
+After a successful pass, a drive with working local and cloud notifications waits for a change without periodically rescanning. If either watcher is unavailable, it polls after 30 seconds instead. A failed pass waits 30 seconds before retrying, even if more notifications arrive. If a local file changes while it is being transferred, the app skips only that file, finishes the rest of the pass, and rechecks that path 30 seconds later instead of rescanning the whole pair. The debug scan summary counts these as `DeferredFiles`.
 
 At startup the app scans the paired folders in full. During routine sync it groups local and cloud notifications by path. Editing a file checks that file and lists its parent directories. A directory notification covers its subtree, and a rename checks both the old and new paths. The app rechecks both paired roots before applying changes.
 
-A lost notification, a change to ignore rules, or an uncertain move triggers a full scan. For example, when a tracked file disappears and the batch contains no matching destination, the app checks the rest of the pair before propagating the deletion. At Debug log level, the scan summary includes `ScanScope` (`Paths` or `Full`).
+A lost notification, a change to ignore rules, or an uncertain move triggers a full scan. For example, when a tracked file disappears and the batch contains no matching destination, the app checks the rest of the pair before propagating the deletion. At Debug log level, the scan summary includes `ScanScope` (`Paths` or `Full`). A full scan also records `FullScanReason`, for example `Startup`, `RemoteCatchUp`, `TooManyChangedPaths`, `RetryAfterFailedFullScan`, or `Escalated:LocalItemDisappeared` when a path scan had to widen.
 
 Local scans, remote scans, and transfers each start with two concurrent operations per drive and can grow to six while work is waiting. Rate limits, service-unavailable responses, or request timeouts stop the current pass and halve the affected limit, down to one. The next pass scans again. Folder changes, moves, deletions, and chunks within a single upload stay sequential.
 

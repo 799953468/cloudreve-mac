@@ -49,7 +49,8 @@ internal sealed class PairScanScope
         return ancestors.Contains(key) || Covers(key);
     }
 
-    internal bool NeedsFullInventory(Dictionary<string, FileBaseline> baseline, PairInventory local, PairInventory remote, BaselineDatabase database)
+    // Returns why this path scan cannot be trusted on its own, or null when it can.
+    internal string? FullInventoryReason(Dictionary<string, FileBaseline> baseline, PairInventory local, PairInventory remote, BaselineDatabase database)
     {
         foreach (string parent in ancestors)
         {
@@ -59,12 +60,19 @@ internal sealed class PairScanScope
             }
 
             // A change to an ancestor can affect siblings outside this batch.
-            if (!baseline.TryGetValue(parent, out var known) || !known.IsDirectory ||
-                !local.Nodes.TryGetValue(parent, out var here) || here.Kind != NodeKind.Directory || here.LocalId != known.LocalId ||
-                !remote.Nodes.TryGetValue(parent, out var there) || there.Kind != NodeKind.Directory || there.Remote!.Id != known.RemoteId ||
-                here.Key != parent || there.Key != parent)
+            if (!baseline.TryGetValue(parent, out var known) || !known.IsDirectory)
             {
-                return true;
+                return "AncestorNotSynced";
+            }
+
+            if (!local.Nodes.TryGetValue(parent, out var here) || here.Kind != NodeKind.Directory || here.LocalId != known.LocalId || here.Key != parent)
+            {
+                return "LocalAncestorChanged";
+            }
+
+            if (!remote.Nodes.TryGetValue(parent, out var there) || there.Kind != NodeKind.Directory || there.Remote!.Id != known.RemoteId || there.Key != parent)
+            {
+                return "RemoteAncestorChanged";
             }
         }
 
@@ -73,13 +81,17 @@ internal sealed class PairScanScope
         foreach (var (key, known) in baseline)
         {
             // The database returned only visited paths. A lone disappearance can be one half of a move.
-            if (!local.Nodes.ContainsKey(key) && known.LocalId != null && !localIds.Contains(known.LocalId) ||
-                !remote.Nodes.ContainsKey(key) && known.RemoteId != null && !remoteIds.Contains(known.RemoteId))
+            if (!local.Nodes.ContainsKey(key) && known.LocalId != null && !localIds.Contains(known.LocalId))
             {
-                return true;
+                return "LocalItemDisappeared";
+            }
+
+            if (!remote.Nodes.ContainsKey(key) && known.RemoteId != null && !remoteIds.Contains(known.RemoteId))
+            {
+                return "RemoteItemDisappeared";
             }
         }
 
-        return database.HasOutsideIdentity(baseline, local, remote);
+        return database.HasOutsideIdentity(baseline, local, remote) ? "IdentityMovedFromOutsideScope" : null;
     }
 }

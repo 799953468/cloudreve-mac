@@ -12,13 +12,20 @@ internal enum ConflictChoice
     KeepBoth
 }
 
-internal sealed record PairSyncResult(int Uploaded, int Downloaded, int Removed, IReadOnlyList<string> Conflicts, IReadOnlyList<FileConflict> Choices, int DeferredDirectories);
+// DeferredPaths lists subtrees and files this pass skipped because they changed locally; only they need a retry.
+internal sealed record PairSyncResult(int Uploaded, int Downloaded, int Removed, IReadOnlyList<string> Conflicts, IReadOnlyList<FileConflict> Choices, int DeferredDirectories,
+    int DeferredFiles = 0, IReadOnlyList<string>? DeferredPaths = null);
+
+// A local file no longer matches its scan. Only that path needs another look; the rest of the pass is still valid.
+internal sealed class LocalFileChangedException(string message) : IOException(message);
 
 internal sealed class PairScanAttempt
 {
     private readonly Stopwatch timer = Stopwatch.StartNew();
     internal string Stage { get; set; } = "Prepare";
     internal PairScanScope? Scope { get; set; }
+    // Why this pass scanned the whole pair. Set by the caller for a full request and here when a path scan escalates.
+    internal string? FullReason { get; set; }
     internal long ElapsedMs { get { return timer.ElapsedMilliseconds; } }
 }
 
@@ -64,6 +71,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                 if (scope != null && database.HasLegacyIds())
                 {
                     scope = null;
+                    attempt.FullReason = "LegacyBaselineIds";
                 }
 
                 while (true)
@@ -84,11 +92,13 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                     }
                     remote = await PairInventory.ReadRemoteAsync(pair.Remote, "", drive, rules, remoteScan, cancel,
                         activity == null ? null : count => activity.SetScan(ScanPhase.Remote, count, scope != null), scope);
-                    if (scope == null || !scope.NeedsFullInventory(baseline, local, remote, database))
+                    string? escalation = scope?.FullInventoryReason(baseline, local, remote, database);
+                    if (escalation == null)
                     {
                         break;
                     }
 
+                    attempt.FullReason = "Escalated:" + escalation;
                     scope = null;
                 }
 
@@ -116,6 +126,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
             var choices = new List<FileConflict>();
             var blocked = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var deferred = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var deferredFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var directoryTrash = new List<PairNode>();
             var trashedDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var pending = new List<FileTransfer>();
@@ -237,6 +248,13 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                 await transfers.RunAsync(work, (entry, token) => TransferFileAsync(entry.File, queue.Files(entry), token), completed =>
                 {
                     var item = completed.Item;
+                    if (completed.Deferred)
+                    {
+                        // Keep the queued entry and its checkpoint; the next scan of this path replaces it.
+                        deferredFiles.Add(item.Key);
+                        return;
+                    }
+
                     finished.Add(item.Key);
                     if (completed.Baseline == null)
                     {
@@ -314,7 +332,8 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                 attempt.Stage = previousStage;
             }
 
-            return new PairSyncResult(uploaded, downloaded, removed, conflicts.ToArray(), choices, deferred.Count);
+            return new PairSyncResult(uploaded, downloaded, removed, conflicts.ToArray(), choices, deferred.Count,
+                deferredFiles.Count, deferred.Concat(deferredFiles).ToArray());
         }
     }
 
@@ -538,7 +557,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
             }
         }
 
-        throw new IOException(UiText.Get("本地文件在同步期间已变化，将重新扫描。"));
+        throw new LocalFileChangedException(UiText.Get("本地文件在同步期间已变化，将重新扫描。"));
     }
 
     private void EnsureLocalDirectory(string relative)
