@@ -52,9 +52,13 @@ internal sealed class PairScanScope
     // Returns why this path scan cannot be trusted on its own, or null when it can.
     internal string? FullInventoryReason(Dictionary<string, FileBaseline> baseline, PairInventory local, PairInventory remote, BaselineDatabase database)
     {
+        // A full scan also turns a locally replaced directory into a conflict that blocks its whole subtree,
+        // so walking the pair would only reach the same result. Paths inside it are blocked by this pass instead.
+        var replaced = ancestors.Where(parent => !Covers(parent) && ReplacedLocally(parent, baseline, local))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (string parent in ancestors)
         {
-            if (Covers(parent))
+            if (Covers(parent) || Within(replaced, parent))
             {
                 continue;
             }
@@ -80,6 +84,11 @@ internal sealed class PairScanScope
         var remoteIds = remote.Nodes.Values.Where(node => node.Remote?.Id != null).Select(node => node.Remote!.Id!).ToHashSet();
         foreach (var (key, known) in baseline)
         {
+            if (Within(replaced, key))
+            {
+                continue;
+            }
+
             // The database returned only visited paths. A lone disappearance can be one half of a move.
             if (!local.Nodes.ContainsKey(key) && known.LocalId != null && !localIds.Contains(known.LocalId))
             {
@@ -92,6 +101,27 @@ internal sealed class PairScanScope
             }
         }
 
+        // Still checked for replaced trees: a replacement that came from elsewhere in the pair is a move.
         return database.HasOutsideIdentity(baseline, local, remote) ? "IdentityMovedFromOutsideScope" : null;
+    }
+
+    // Mirrors the identity check in SyncDirectoriesAsync that marks the directory as a conflict.
+    private static bool ReplacedLocally(string key, Dictionary<string, FileBaseline> baseline, PairInventory local)
+    {
+        return baseline.TryGetValue(key, out var known) && known.IsDirectory && known.LocalId != null &&
+               local.Nodes.TryGetValue(key, out var here) && here.Kind == NodeKind.Directory && here.Key == key && here.LocalId != known.LocalId;
+    }
+
+    private static bool Within(HashSet<string> roots, string key)
+    {
+        for (string? path = key; !string.IsNullOrEmpty(path); path = PairKey.Parent(path))
+        {
+            if (roots.Contains(path))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

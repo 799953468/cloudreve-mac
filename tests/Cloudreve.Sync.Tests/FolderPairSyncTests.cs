@@ -289,6 +289,50 @@ public sealed class FolderPairSyncTests : IDisposable
     }
 
     [Fact]
+    public async Task ChangeInsideLocallyReplacedDirectoryStaysAPathScan()
+    {
+        site.Folders.UnionWith([Root + "/build", Root + "/build/out", Root + "/unrelated"]);
+        site.Put(Root + "/build/out/old", "old");
+        await RunAsync();
+        // Build tools delete and recreate their output folders, which gives them new identities.
+        string build = Path.Combine(pair.Local, "build");
+        Directory.Delete(build, true);
+        Directory.CreateDirectory(Path.Combine(build, "out"));
+        Assert.Equal("build", Assert.Single((await RunAsync()).Conflicts));
+
+        File.WriteAllText(Path.Combine(build, "out", "new"), "new");
+        site.BeforeList = uri => Assert.NotEqual(Root + "/unrelated", uri);
+        var attempt = new PairScanAttempt();
+        var result = await RunAsync(attempt: attempt, scope: new PairScanScope(["build/out/new"]));
+
+        Assert.NotNull(attempt.Scope);
+        Assert.Null(attempt.FullReason);
+        Assert.Equal("build", Assert.Single(result.Conflicts));
+        Assert.Equal(0, result.Uploaded);
+        Assert.Empty(site.TrashRequests);
+        Assert.DoesNotContain(Root + "/build/out/new", site.Files.Keys);
+        Assert.Equal("old", site.Files[Root + "/build/out/old"].Text);
+    }
+
+    [Fact]
+    public async Task ReplacementDirectoryMovedFromElsewhereInThePairStillEscalates()
+    {
+        site.Folders.UnionWith([Root + "/a", Root + "/b"]);
+        site.Put(Root + "/b/doc", "doc");
+        await RunAsync();
+        string a = Path.Combine(pair.Local, "a");
+        Directory.Delete(a);
+        Directory.Move(Path.Combine(pair.Local, "b"), a);
+
+        var attempt = new PairScanAttempt();
+        await RunAsync(attempt: attempt, scope: new PairScanScope(["a/doc"]));
+
+        Assert.Null(attempt.Scope);
+        Assert.StartsWith("Escalated:", attempt.FullReason);
+        Assert.Empty(site.TrashRequests);
+    }
+
+    [Fact]
     public async Task NewDirectoryHintIncludesDescendantsAndSkipsSiblingTree()
     {
         site.Folders.Add(Root + "/unrelated");
