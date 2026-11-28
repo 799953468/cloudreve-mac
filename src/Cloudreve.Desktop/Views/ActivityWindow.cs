@@ -331,11 +331,18 @@ internal sealed partial class ActivityWindow : Window
         string where = string.IsNullOrEmpty(parent) ? drive.Account.Name : $"{drive.Account.Name} · {parent}";
         lines.Children.Add(new TextBlock { Text = where, Classes = { "secondary" }, FontSize = 12, LineHeight = 16, TextTrimming = TextTrimming.CharacterEllipsis });
         ToolTip.SetTip(row, conflict.Key);
-        string reason = UiText.Get(conflict.Reason switch
+        string reason = UiText.Get(conflict.Cause switch
         {
-            ConflictReason.DeletedLocally => "popup.conflictDeletedLocally",
-            ConflictReason.DeletedInCloud => "popup.conflictDeletedInCloud",
-            ConflictReason.NeedsManualReview => "popup.conflictManual",
+            ConflictCause.DeletedLocally => "popup.conflictDeletedLocally",
+            ConflictCause.DeletedInCloud => "popup.conflictDeletedInCloud",
+            ConflictCause.TypeMismatch => "popup.conflictTypeMismatch",
+            ConflictCause.UnsupportedItem => "popup.conflictUnsupportedItem",
+            ConflictCause.NameCollision => "popup.conflictNameCollision",
+            ConflictCause.DirectoryReplaced => "popup.conflictDirectoryReplaced",
+            ConflictCause.CloudFolderReplaced => "popup.conflictCloudFolderReplaced",
+            ConflictCause.DirectoryNotEmpty => "popup.conflictDirectoryNotEmpty",
+            ConflictCause.UncertainMove => "popup.conflictUncertainMove",
+            ConflictCause.UnverifiedIdentity => "popup.conflictUnverifiedIdentity",
             _ => "popup.conflictContentsDiffer"
         });
         lines.Children.Add(new TextBlock { Text = reason, Classes = { "warning" }, FontSize = 12, LineHeight = 16, TextWrapping = TextWrapping.Wrap });
@@ -358,11 +365,11 @@ internal sealed partial class ActivityWindow : Window
         if (conflict.Choice != null)
         {
             actions.Children.Add(ResolveButton(drive, conflict, ConflictChoice.KeepLocal, "popup.keepLocal",
-                conflict.Reason == ConflictReason.DeletedLocally ? "popup.keepLocalTrashTip" : "popup.keepLocalUploadTip"));
-            actions.Children.Add(ResolveButton(drive, conflict, ConflictChoice.KeepRemote, "popup.keepRemote", conflict.Reason switch
+                conflict.Cause == ConflictCause.DeletedLocally ? "popup.keepLocalTrashTip" : "popup.keepLocalUploadTip"));
+            actions.Children.Add(ResolveButton(drive, conflict, ConflictChoice.KeepRemote, "popup.keepRemote", conflict.Cause switch
             {
-                ConflictReason.DeletedLocally => "popup.keepRemoteRestoreTip",
-                ConflictReason.DeletedInCloud => "popup.keepRemoteRecoverTip",
+                ConflictCause.DeletedLocally => "popup.keepRemoteRestoreTip",
+                ConflictCause.DeletedInCloud => "popup.keepRemoteRecoverTip",
                 _ => "popup.keepRemoteDownloadTip"
             }));
             if (conflict.CanKeepBoth)

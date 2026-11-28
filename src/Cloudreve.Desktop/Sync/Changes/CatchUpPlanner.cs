@@ -15,6 +15,7 @@ internal static class CatchUpPlanner
 {
     internal const string CursorState = "remoteCursor";
     internal const string LastFullState = "lastFullScan";
+    internal const string ConflictsState = "conflicts";
     // A cursor is saved this far before the server time it was taken at, so slow commits and clock rounding are covered.
     internal static readonly TimeSpan CursorMargin = TimeSpan.FromMinutes(2);
     // Older cursors are not trusted: the trash may already have purged deletions made since then.
@@ -29,6 +30,32 @@ internal static class CatchUpPlanner
     internal static void WriteCursor(BaselineDatabase database, string name, DateTimeOffset value)
     {
         database.WriteState(name, value.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture));
+    }
+
+    // Paths that were in conflict after the last completed pass. A catch-up visits them again so the conflict list
+    // comes back after a restart, with the copies' current state.
+    internal static HashSet<string> ReadConflicts(BaselineDatabase database)
+    {
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (database.ReadState(ConflictsState) is { } json)
+        {
+            try
+            {
+                keys.UnionWith((System.Text.Json.JsonSerializer.Deserialize(json, DesktopJson.Default.StringArray) ?? []).Where(TransferQueue.IsSafeKey));
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                // Only a hint for the next catch-up; a damaged list is dropped.
+            }
+        }
+
+        return keys;
+    }
+
+    internal static void WriteConflicts(BaselineDatabase database, IEnumerable<string> keys)
+    {
+        string[] sorted = keys.Order(StringComparer.Ordinal).ToArray();
+        database.WriteState(ConflictsState, sorted.Length == 0 ? null : System.Text.Json.JsonSerializer.Serialize(sorted, DesktopJson.Default.StringArray));
     }
 
     internal static async Task<CatchUpPlan> PlanAsync(FolderPairStore store, FolderPair pair, DriveClient drive, PassResources resources, SyncActivity? activity,
@@ -107,6 +134,7 @@ internal static class CatchUpPlanner
 
             activity?.SetScan(ScanPhase.Idle);
             keys.UnionWith(extraPaths.Where(TransferQueue.IsSafeKey));
+            keys.UnionWith(ReadConflicts(database).Where(key => !rules.Excludes(key)));
             // Interrupted transfers resume only inside a pass that covers them.
             keys.UnionWith(TransferQueue.Open(store.TransferDirectory(pair), resources.CachedQueue).Entries.Select(entry => entry.File.Key));
             var targets = keys.Where(key => !HasAncestorIn(keys, key)).ToArray();

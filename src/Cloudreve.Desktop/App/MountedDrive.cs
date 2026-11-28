@@ -3,35 +3,13 @@ using Serilog.Events;
 
 namespace Cloudreve.Desktop;
 
-internal enum ConflictReason
+// One unresolved path from the latest scans. Choice is null when no copy can be chosen automatically, for example a
+// file and a folder sharing one name, a link, or a name this system cannot store; Cause says which.
+internal sealed record PairConflict(string Key, FileConflict? Choice, ConflictCause Cause)
 {
-    ContentsDiffer,
-    DeletedLocally,
-    DeletedInCloud,
-    NeedsManualReview
-}
-
-// One unresolved path from the latest scans. Choice is null when the app cannot offer an automatic resolution,
-// for example a file and a folder sharing one name, or a name this system cannot store.
-internal sealed record PairConflict(string Key, FileConflict? Choice)
-{
-    internal ConflictReason Reason
-    {
-        get
-        {
-            return Choice switch
-            {
-                null => ConflictReason.NeedsManualReview,
-                { LocalHash: null } => ConflictReason.DeletedLocally,
-                { Remote: null } => ConflictReason.DeletedInCloud,
-                _ => ConflictReason.ContentsDiffer
-            };
-        }
-    }
-
     internal bool CanKeepBoth
     {
-        get { return Reason == ConflictReason.ContentsDiffer; }
+        get { return Choice != null && Cause == ConflictCause.ContentsDiffer; }
     }
 }
 
@@ -235,7 +213,10 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
 
             foreach (string key in result.Conflicts)
             {
-                var conflict = new PairConflict(key, choices.GetValueOrDefault(key));
+                var choice = choices.GetValueOrDefault(key);
+                var cause = result.Causes?.GetValueOrDefault(key) ??
+                    (choice != null ? FileReconciler.ChoiceCause(choice.LocalHash, choice.Remote) : ConflictCause.UnsupportedItem);
+                var conflict = new PairConflict(key, choice, cause);
                 next[key] = conflict;
                 if (!conflicts.ContainsKey(key))
                 {
@@ -257,7 +238,7 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
         foreach (var conflict in added)
         {
             logger.ForContext("LocalHash", conflict.Choice?.LocalHash).ForContext("RemoteVersion", conflict.Choice?.Remote?.Version)
-                .Warning("Sync conflict at {ConflictKey}: {ConflictReason}; the path is not synced until it is resolved", conflict.Key, conflict.Reason);
+                .Warning("Sync conflict at {ConflictKey}: {ConflictCause}; the path is not synced until it is resolved", conflict.Key, conflict.Cause);
         }
 
         foreach (string key in cleared)
@@ -272,7 +253,7 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
     private async Task ResolveNewerAsync(FolderPairSync current, ILogger logger, CancellationToken cancel)
     {
         autoDeclined.IntersectWith(Conflicts);
-        foreach (var conflict in Conflicts.Where(item => item.Reason == ConflictReason.ContentsDiffer && !autoDeclined.Contains(item)))
+        foreach (var conflict in Conflicts.Where(item => item.CanKeepBoth && !autoDeclined.Contains(item)))
         {
             cancel.ThrowIfCancellationRequested();
             ConflictChoice? choice;
@@ -327,7 +308,7 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
             throw new InvalidOperationException(UiText.Get("pair.conflictFromOtherPair"));
         }
 
-        logger.Information("Resolving sync conflict at {ConflictKey} ({ConflictReason}) with {ConflictChoice}", conflict.Key, conflict.Reason, choice);
+        logger.Information("Resolving sync conflict at {ConflictKey} ({ConflictCause}) with {ConflictChoice}", conflict.Key, conflict.Cause, choice);
         string? copyKey;
         try
         {

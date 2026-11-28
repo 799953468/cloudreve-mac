@@ -146,6 +146,28 @@ public sealed partial class FolderPairSyncTests
     }
 
     [Fact]
+    public async Task ConflictsComeBackAfterARestartWithTheirCause()
+    {
+        site.Put(Root + "/doc", "cloud");
+        File.WriteAllText(Path.Combine(pair.Local, "doc"), "local");
+        var first = await FullPassAsync();
+        Assert.Equal(ConflictCause.ContentsDiffer, first.Causes!["doc"]);
+
+        // Nothing changed since, so only the saved conflict list brings the path into a cloud catch-up after a restart.
+        site.Now = site.Now.AddMinutes(10);
+        var (result, _, plan) = await CatchUpAsync(local: false);
+        Assert.Equal(["doc"], plan.Scope!.Targets);
+        Assert.Equal(ConflictCause.ContentsDiffer, result.Causes!["doc"]);
+        var choice = Assert.Single(result.Choices);
+
+        await Engine().ResolveConflictAsync(choice, ConflictChoice.KeepLocal, TestContext.Current.CancellationToken);
+        Assert.Empty((await RunAsync(scope: new PairScanScope(["doc"]))).Conflicts);
+        site.Now = site.Now.AddMinutes(10);
+        var settled = await Engine().PlanCatchUpAsync(true, false, [], site.Now, TestContext.Current.CancellationToken);
+        Assert.Empty(settled.Scope!.Targets);
+    }
+
+    [Fact]
     public async Task CoordinatorCatchesUpAtStartupAndVerifiesWhenDue()
     {
         site.Put(Root + "/doc", "doc");

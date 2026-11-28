@@ -604,7 +604,17 @@ internal sealed class SyncPass(FolderPairStore store, FolderPair pair, PairOpera
     // or a catch-up of cloud changes. A deferred folder may hide cloud changes this pass never applied, so it keeps the old cursor.
     private void SaveProgress(bool completed)
     {
-        if (!completed || attempt.ServerTime is not { } time)
+        if (!completed)
+        {
+            return;
+        }
+
+        // A full pass replaces the saved conflicts; a path pass replaces only those inside its scope.
+        var saved = attempt.Scope == null ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : CatchUpPlanner.ReadConflicts(database);
+        saved.RemoveWhere(key => attempt.Scope?.Covers(key) != false);
+        saved.UnionWith(conflicts.Keys);
+        CatchUpPlanner.WriteConflicts(database, saved);
+        if (attempt.ServerTime is not { } time)
         {
             return;
         }
