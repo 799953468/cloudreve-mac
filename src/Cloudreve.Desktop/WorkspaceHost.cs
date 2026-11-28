@@ -140,11 +140,11 @@ internal sealed class WorkspaceHost(DriveProfiles profiles, WindowIcon? icon = n
         FolderPair? created = null;
         if (existing?.Pair == null)
         {
-            CheckEmpty(local!);
+            CheckLocalFolder(local!);
             var client = VerifyClient(account, updated => { account = updated; });
             string id = await client.FolderIdAsync(account.Root, cancel);
             cancel.ThrowIfCancellationRequested();
-            CheckEmpty(local!);
+            CheckLocalFolder(local!);
             profiles.Reserve(store, local!);
             try
             {
@@ -195,7 +195,7 @@ internal sealed class WorkspaceHost(DriveProfiles profiles, WindowIcon? icon = n
         Changed?.Invoke();
     }
 
-    internal static void CheckEmpty(string local)
+    internal static void CheckLocalFolder(string local)
     {
         if (!Path.IsPathFullyQualified(local))
         {
@@ -203,10 +203,6 @@ internal sealed class WorkspaceHost(DriveProfiles profiles, WindowIcon? icon = n
         }
 
         FolderPairStore.CheckDirectory(Cloudreve.Sync.MacFile.NormalizeSystemPath(local));
-        if (Directory.EnumerateFileSystemEntries(local).Any())
-        {
-            throw new IOException(DesktopText.Get("addDrive.folderNotEmpty"));
-        }
     }
 
     internal async Task RemoveAsync(MountedDrive drive)

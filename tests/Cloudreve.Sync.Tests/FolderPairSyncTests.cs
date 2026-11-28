@@ -290,6 +290,26 @@ public sealed class FolderPairSyncTests : IDisposable
     }
 
     [Fact]
+    public async Task FirstSyncComparesFilesAlreadyPresentOnBothSides()
+    {
+        string match = Path.Combine(pair.Local, "match.txt");
+        string conflict = Path.Combine(pair.Local, "conflict.txt");
+        File.WriteAllText(match, "same");
+        site.Put(Root + "/match.txt", "same");
+        File.WriteAllText(conflict, "local");
+        site.Put(Root + "/conflict.txt", "cloud");
+
+        var result = await RunAsync();
+
+        Assert.Equal("conflict.txt", Assert.Single(result.Conflicts));
+        Assert.Equal("local", File.ReadAllText(conflict));
+        Assert.Equal("cloud", site.Files[Root + "/conflict.txt"].Text);
+        var baseline = store.ReadBaseline(pair);
+        Assert.True(baseline.ContainsKey("match.txt"));
+        Assert.False(baseline.ContainsKey("conflict.txt"));
+    }
+
+    [Fact]
     public async Task TransfersNestedFilesBothWaysAndResumesFromDisk()
     {
         Directory.CreateDirectory(Path.Combine(pair.Local, "notes"));

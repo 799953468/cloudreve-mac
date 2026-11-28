@@ -39,7 +39,7 @@ On macOS 13 or later, turn on **Settings > General > Launch at startup** in `Clo
 
 1. In **Add Drive**, enter the site's root URL (for example, `https://drive.example.com`) and choose **Connect**. Use HTTPS to protect your tokens and files in transit.
 2. Sign in on the site in your browser, choose the remote folder to authorize, and allow the browser to reopen Cloudreve. Leave the app running during sign-in. The app never asks for your site password.
-3. In **Final Setup**, name the drive, choose an **empty local folder**, and select **Finish**. Click the Cloudreve menu bar icon to follow the first sync.
+3. In **Final Setup**, name the drive, choose a local folder, and select **Finish**. You can choose a folder that already contains files. The first sync uploads local-only files and downloads cloud-only files. If files at the same relative path have different contents, the app keeps both versions in place and reports a conflict. Click the Cloudreve menu bar icon to follow the first sync.
 
 > [!IMPORTANT]
 > Deleting a synced file in Finder is **not** a way to free up local space: the app also asks Cloudreve to move the unchanged remote copy to its trash. For occasional access without keeping a local copy, use the web interface instead.

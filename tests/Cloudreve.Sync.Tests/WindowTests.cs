@@ -122,7 +122,7 @@ public sealed class WindowTests : IDisposable
     }
 
     [Fact]
-    public async Task BrowserCallbackRequiresExplicitFinishAndEmptyFolder()
+    public async Task BrowserCallbackRequiresExplicitFinishAndAcceptsPopulatedFolder()
     {
         await using var ui = HeadlessUnitTestSession.StartNew(typeof(TestApplication));
         await ui.Dispatch(async () =>
@@ -158,11 +158,12 @@ public sealed class WindowTests : IDisposable
                 var folder = temp.CreateSubdirectory("mount");
                 string path = Path.Combine(folder.FullName, "existing.txt");
                 File.WriteAllText(path, "original");
-                wizard.LocalPath.Text = folder.FullName;
+                wizard.LocalPath.Text = path;
                 await wizard.AdvanceAsync();
                 Assert.True(wizard.ErrorPanel.IsVisible);
                 Assert.Null(sessions.Load());
-                File.Delete(path);
+                Assert.Equal(0, transport.Exchanges);
+                wizard.LocalPath.Text = folder.FullName;
                 wizard.MountName.Text = "Work";
                 await wizard.AdvanceAsync();
                 Assert.Equal("设置完成！", wizard.Heading.Text);
@@ -174,9 +175,8 @@ public sealed class WindowTests : IDisposable
                 await transport.RootScanned.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 Assert.False(wizard.Accept(Callback(state)));
                 wizard.Close();
-                File.WriteAllText(path, "keep");
                 await host.RemoveAsync(drive);
-                Assert.Equal("keep", File.ReadAllText(path));
+                Assert.Equal("original", File.ReadAllText(path));
                 Assert.Null(sessions.Load());
             }
             finally

@@ -108,7 +108,7 @@ internal sealed partial class AddDriveWindow : Window
 
         try
         {
-            WorkspaceHost.CheckEmpty(LocalPath.Text);
+            WorkspaceHost.CheckLocalFolder(LocalPath.Text);
             invalidFolder = false;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
@@ -169,7 +169,7 @@ internal sealed partial class AddDriveWindow : Window
                 case Step.Setup:
                     if (!Reauthorizing)
                     {
-                        WorkspaceHost.CheckEmpty(LocalPath.Text ?? "");
+                        WorkspaceHost.CheckLocalFolder(LocalPath.Text ?? "");
                     }
 
                     step = Step.Installing;
