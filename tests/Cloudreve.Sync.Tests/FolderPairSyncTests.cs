@@ -1923,6 +1923,7 @@ public sealed partial class FolderPairSyncTests : IDisposable
                 Files.TryGetValue(uri, out var old);
                 return new { id = Ids.GetValueOrDefault(uri, sessionId), name = uri[(uri.LastIndexOf('/') + 1)..], path = uri, type = 0,
                     size = uploadLengths[sessionId], primary_entity = old.Version,
+                    updated_at = Modified.TryGetValue(uri, out var touched) ? touched.ToString("O") : null,
                     metadata = new Dictionary<string, string> { ["sys:upload_session_id"] = ForeignPlaceholder ? "another-client" : sessionId } };
             }
 

@@ -8,6 +8,19 @@ internal sealed class PairIgnoreRules
 
     private readonly List<Rule> rules = [];
 
+    // Metadata of other sync tools and of the system, ignored in every pair before the user's rules, which can
+    // re-include any of it with "!". Ignored paths are never deleted on either side; they only stop syncing.
+    internal const string BuiltIn = """
+        .stfolder/
+        .stversions/
+        .syncthing.*.tmp
+        Thumbs.db
+        ehthumbs.db
+        desktop.ini
+        ~$*
+        .~lock.*#
+        """;
+
     internal PairIgnoreRules(string text)
     {
         if (text.Length > 32768)
@@ -15,7 +28,7 @@ internal sealed class PairIgnoreRules
             throw new InvalidDataException(UiText.Get("ignoreRules.tooLong"));
         }
 
-        foreach (string line in text.ReplaceLineEndings("\n").Split('\n'))
+        foreach (string line in (BuiltIn + "\n" + text).ReplaceLineEndings("\n").Split('\n'))
         {
             string pattern = line.Trim();
             if (pattern.Length == 0 || pattern.StartsWith('#'))

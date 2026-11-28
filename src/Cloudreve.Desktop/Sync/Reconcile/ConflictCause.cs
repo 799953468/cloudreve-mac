@@ -25,7 +25,9 @@ internal enum ConflictCause
     // A move or rename that cannot be matched to one source and one destination safely.
     UncertainMove,
     // Sync history from an older version lacks the identities needed to propagate this change safely.
-    UnverifiedIdentity
+    UnverifiedIdentity,
+    // Another client's upload to this path has not finished yet. Abandoned ones are cleaned up after a day.
+    UploadInProgress
 }
 
 // Conflicts found by one pass. The first cause recorded for a path wins; later checks only confirm it.

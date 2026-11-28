@@ -82,6 +82,7 @@
     "conflictCloudFolderReplaced": "This cloud folder was replaced by a different folder. It is paused so nothing is deleted by mistake.",
     "conflictDirectoryNotEmpty": "This folder was deleted on one side, but the other side still has new or changed items in it.",
     "conflictUncertainMove": "A move or rename that couldn't be matched safely. It syncs again once both sides agree.",
+    "conflictUploadInProgress": "Another device is still uploading this file. Uploads left unfinished for a day are cleaned up automatically.",
     "conflictUnverifiedIdentity": "Sync history from an older version isn't enough to apply this change safely.",
     "keepLocal": "Keep local",
     "keepRemote": "Keep cloud",

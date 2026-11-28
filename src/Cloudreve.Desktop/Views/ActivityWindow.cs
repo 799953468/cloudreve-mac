@@ -343,6 +343,7 @@ internal sealed partial class ActivityWindow : Window
             ConflictCause.DirectoryNotEmpty => "popup.conflictDirectoryNotEmpty",
             ConflictCause.UncertainMove => "popup.conflictUncertainMove",
             ConflictCause.UnverifiedIdentity => "popup.conflictUnverifiedIdentity",
+            ConflictCause.UploadInProgress => "popup.conflictUploadInProgress",
             _ => "popup.conflictContentsDiffer"
         });
         lines.Children.Add(new TextBlock { Text = reason, Classes = { "warning" }, FontSize = 12, LineHeight = 16, TextWrapping = TextWrapping.Wrap });

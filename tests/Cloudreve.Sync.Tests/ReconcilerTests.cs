@@ -47,9 +47,7 @@ public sealed class ReconcilerTests
     private DirectoryDecision Directory(string key, bool adopt = true)
     {
         var view = View();
-        var scanned = local.Nodes.Values.Where(node => node.LocalId != null).Select(node => node.LocalId!).ToHashSet();
-        var tracked = baseline.Values.Where(entry => entry.LocalId != null).Select(entry => entry.LocalId!).ToHashSet();
-        return DirectoryReconciler.Decide(key, view, adopt, scanned, tracked);
+        return DirectoryReconciler.Decide(key, view, adopt, IdentitySets.From(view));
     }
 
     [Fact]
@@ -88,6 +86,8 @@ public sealed class ReconcilerTests
         baseline["swapped"] = new FileBaseline("", "", LocalId(3), "r3", true);
         LocalDir("swapped", 3);
         RemoteDir("swapped", "other");
+        // The old cloud folder still exists elsewhere, so the new one is not the same folder rebuilt.
+        RemoteDir("elsewhere", "r3");
         Assert.Equal(DirectoryDecision.Conflict(ConflictCause.TypeMismatch), Directory("mixed"));
         RemoteDir("link", "r2");
         Assert.Equal(DirectoryDecision.Conflict(ConflictCause.UnsupportedItem), Directory("link"));
@@ -114,6 +114,20 @@ public sealed class ReconcilerTests
     }
 
     [Fact]
+    public void FolderRecreatedInTheCloudIsAdoptedWhileTheLocalOneIsUnchanged()
+    {
+        baseline["deps"] = new FileBaseline("", "", LocalId(1), "r1", true);
+        LocalDir("deps", 1);
+        RemoteDir("deps", "r2");
+        Assert.Equal(DirectoryAction.Record, Directory("deps").Action);
+        Assert.Equal(DirectoryDecision.Conflict(ConflictCause.CloudFolderReplaced), Directory("deps", adopt: false));
+
+        // Replaced on both sides: neither can vouch for the other.
+        LocalDir("deps", 9);
+        Assert.Equal(DirectoryDecision.Conflict(ConflictCause.DirectoryReplaced), Directory("deps"));
+    }
+
+    [Fact]
     public void BlockedAndIgnoredFoldersAreLeftAlone()
     {
         LocalDir("parent", 1);
@@ -121,7 +135,7 @@ public sealed class ReconcilerTests
         blocked.Add("parent");
         baseline["ignored"] = new FileBaseline("", "", LocalId(3), "r3", true);
         Assert.Equal(DirectoryAction.Skip, Directory("parent/child").Action);
-        Assert.Equal(DirectoryAction.Forget, DirectoryReconciler.Decide("ignored", View("ignored/"), true, [], []).Action);
+        Assert.Equal(DirectoryAction.Forget, DirectoryReconciler.Decide("ignored", View("ignored/"), true, IdentitySets.From(View())).Action);
     }
 
     [Fact]
@@ -162,12 +176,28 @@ public sealed class ReconcilerTests
         LocalFile("Case", "H1", 1);
         baseline["was-file"] = new FileBaseline("H2", "v2", LocalId(2), "r2");
         LocalDir("was-file", 3);
+        RemoteFile("linked-elsewhere", "v1", "r9");
+        local.Nodes["linked-elsewhere"] = new PairNode("linked-elsewhere", NodeKind.Unsupported);
         var view = View();
-        Assert.Equal(ConflictCause.UnsupportedItem, FileReconciler.Decide("link", view).Cause);
+        // A link that exists only here has nothing to protect and is simply not synced.
+        Assert.Equal(FileStep.SkipUnsupported, FileReconciler.Decide("link", view).Step);
+        Assert.Equal(ConflictCause.UnsupportedItem, FileReconciler.Decide("linked-elsewhere", view).Cause);
         Assert.Equal(ConflictCause.NameCollision, FileReconciler.Decide("Case", view).Cause);
         Assert.Equal(ConflictCause.TypeMismatch, FileReconciler.Decide("was-file", view).Cause);
         Assert.Equal(ConflictCause.DeletedInCloud, FileReconciler.ChoiceCause("H", null));
         Assert.Equal(ConflictCause.ContentsDiffer, FileReconciler.ChoiceCause("H", new DriveEntry("a", "cloudreve://my/a", false, 1)));
+    }
+
+    [Fact]
+    public void BuiltInRulesIgnoreOtherSyncToolsAndSystemFiles()
+    {
+        var rules = new PairIgnoreRules("");
+        Assert.True(rules.Excludes(".stfolder", directory: true));
+        Assert.True(rules.Excludes("photos/Thumbs.db"));
+        Assert.True(rules.Excludes("docs/~$report.docx"));
+        Assert.True(rules.Excludes("docs/.~lock.sheet.ods#"));
+        Assert.False(rules.Excludes("docs/report.docx"));
+        Assert.False(new PairIgnoreRules("!desktop.ini").Excludes("desktop.ini"));
     }
 
     [Fact]

@@ -15,7 +15,8 @@ internal enum ConflictChoice
 // DeferredPaths lists subtrees and files this pass skipped because they changed locally; only they need a retry.
 // Causes explains each entry of Conflicts; it is null only for results built by hand.
 internal sealed record PairSyncResult(int Uploaded, int Downloaded, int Removed, IReadOnlyList<string> Conflicts, IReadOnlyList<FileConflict> Choices, int DeferredDirectories,
-    int DeferredFiles = 0, IReadOnlyList<string>? DeferredPaths = null, IReadOnlyDictionary<string, ConflictCause>? Causes = null);
+    int DeferredFiles = 0, IReadOnlyList<string>? DeferredPaths = null, IReadOnlyDictionary<string, ConflictCause>? Causes = null,
+    IReadOnlyList<string>? Skipped = null);
 
 // A local file no longer matches its scan. Only that path needs another look; the rest of the pass is still valid.
 internal sealed class LocalFileChangedException(string message) : IOException(message);

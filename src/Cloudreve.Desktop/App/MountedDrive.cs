@@ -30,6 +30,8 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
     private ILogger? pairLogger;
     // Conflicts the newer-version rule already declined or failed to resolve; a changed conflict is a new record and is tried again.
     private readonly HashSet<PairConflict> autoDeclined = [];
+    // Links and special files already reported this session, so each is logged once.
+    private readonly HashSet<string> reportedSkips = new(StringComparer.OrdinalIgnoreCase);
     private bool remoteUnavailable;
 
     internal SessionFileStore Store { get; } = store;
@@ -72,6 +74,7 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
         coordinator = null;
         pairLogger = null;
         autoDeclined.Clear();
+        reportedSkips.Clear();
         lock (conflictGate)
         {
             conflicts = new Dictionary<string, PairConflict>(StringComparer.OrdinalIgnoreCase);
@@ -152,6 +155,13 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
         var summaryLevel = result.Uploaded + result.Downloaded + result.Removed + result.Conflicts.Count > 0 ? LogEventLevel.Information : LogEventLevel.Debug;
         ScanContext(logger, attempt).Write(summaryLevel, "Folder pair scan finished in {ElapsedMs} ms: {Uploaded} uploaded, {Downloaded} downloaded, {Removed} removed, {Conflicts} conflicts, {DeferredDirectories} directories deferred, {DeferredFiles} files deferred",
             attempt.ElapsedMs, result.Uploaded, result.Downloaded, result.Removed, result.Conflicts.Count, result.DeferredDirectories, result.DeferredFiles);
+        var newSkips = (result.Skipped ?? []).Where(reportedSkips.Add).ToArray();
+        if (newSkips.Length > 0)
+        {
+            logger.Information("Not syncing {SkippedCount} links or special files that exist only on this computer, such as {SkippedExamples}",
+                newSkips.Length, newSkips.Take(5).ToArray());
+        }
+
         var added = UpdateConflicts(result, attempt.Scope, logger);
         if (Program.Preferences.Current.AutoResolveNewer && engine != null)
         {

@@ -363,6 +363,27 @@ internal sealed class PairOperations(FolderPair pair, DriveClient drive, SyncAct
         return true;
     }
 
+    // An upload placeholder untouched this long is abandoned, whichever client started it: upload sessions expire long before.
+    internal static readonly TimeSpan StalePlaceholderAge = TimeSpan.FromHours(24);
+
+    // Cancels another client's abandoned upload so the path can sync again. Cancelling removes a placeholder for a new
+    // file and drops the pending version of an existing one. Returns false, changing nothing, while the upload may still be live.
+    internal async Task<bool> TryClearStalePlaceholderAsync(string key, DriveEntry placeholder, DateTimeOffset now, CancellationToken cancel)
+    {
+        if (placeholder.UploadSessionId is not { } session || await drive.ModifiedAsync(placeholder.Uri, cancel) is not { } modified ||
+            now - modified < StalePlaceholderAge)
+        {
+            return false;
+        }
+
+        await VerifyRemoteRootAsync(cancel);
+        string target = await ResolveRemoteAsync(key, null, false, cancel, requireParents: true, uploadSession: session);
+        await drive.CancelUploadAsync(target, session, cancel);
+        Serilog.Log.Logger.ForContext("PairId", pair.Marker)
+            .Information("Cancelled an abandoned upload at {ConflictKey}, last updated {CloudModified}", key, modified);
+        return true;
+    }
+
     // Runs one queued transfer. A verified result is written next to its checkpoint first, so a crash before the
     // baseline commit cannot lose it.
     internal async Task<CompletedTransfer> TransferFileAsync(FileTransfer item, TransferFiles files, CancellationToken cancel)

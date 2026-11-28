@@ -37,6 +37,7 @@ internal sealed class SyncPass(FolderPairStore store, FolderPair pair, PairOpera
     private readonly HashSet<string> trashedDirectories = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<FileTransfer> pending = [];
     private readonly HashSet<string> finished = [];
+    private readonly List<string> skipped = [];
     private int uploaded, downloaded, removed;
     private bool dirty;
 
@@ -73,7 +74,7 @@ internal sealed class SyncPass(FolderPairStore store, FolderPair pair, PairOpera
             }
 
             return new PairSyncResult(uploaded, downloaded, removed, conflicts.Keys.ToArray(), choices, deferred.Count,
-                deferredFiles.Count, deferred.Concat(deferredFiles).ToArray(), conflicts.Causes);
+                deferredFiles.Count, deferred.Concat(deferredFiles).ToArray(), conflicts.Causes, skipped);
         }
     }
 
@@ -250,12 +251,11 @@ internal sealed class SyncPass(FolderPairStore store, FolderPair pair, PairOpera
         }
 
         var keys = DirectoryReconciler.Keys(view);
-        var scannedIds = local.Nodes.Values.Where(node => node.LocalId != null).Select(node => node.LocalId!).ToHashSet();
-        var trackedIds = baseline.Values.Where(entry => entry.LocalId != null).Select(entry => entry.LocalId!).ToHashSet();
+        var ids = IdentitySets.From(view);
         foreach (string key in keys)
         {
             cancel.ThrowIfCancellationRequested();
-            var decision = DirectoryReconciler.Decide(key, view, adoptRecreated, scannedIds, trackedIds);
+            var decision = DirectoryReconciler.Decide(key, view, adoptRecreated, ids);
             string path = Path.Combine(pair.Local, key);
             switch (decision.Action)
             {
@@ -508,12 +508,22 @@ internal sealed class SyncPass(FolderPairStore store, FolderPair pair, PairOpera
             var decision = FileReconciler.Decide(key, view);
             if (decision.Step == FileStep.CheckOwnedUpload)
             {
-                if (await ops.CollectOwnedUploadAsync(key, decision.There!.Remote!, decision.Here, decision.Previous, queue, pending, cancel))
+                var placeholder = decision.There!.Remote!;
+                if (await ops.CollectOwnedUploadAsync(key, placeholder, decision.Here, decision.Previous, queue, pending, cancel))
                 {
                     continue;
                 }
 
-                decision = FileReconciler.Decide(key, view, ownedUploadChecked: true);
+                if (await ops.TryClearStalePlaceholderAsync(key, placeholder, attempt.ServerTime ?? DateTimeOffset.UtcNow, cancel))
+                {
+                    // The cloud entry changed under this scan; the retry scans the path again.
+                    deferredFiles.Add(key);
+                    continue;
+                }
+
+                // Another client may still be uploading. Leave the path alone until it finishes or goes stale.
+                Conflict(key, ConflictCause.UploadInProgress);
+                continue;
             }
 
             if (decision.Action != SyncAction.Unchanged)
@@ -531,6 +541,9 @@ internal sealed class SyncPass(FolderPairStore store, FolderPair pair, PairOpera
         switch (decision.Step)
         {
             case FileStep.Skip:
+                return;
+            case FileStep.SkipUnsupported:
+                skipped.Add(key);
                 return;
             case FileStep.Forget:
                 dirty |= baseline.Remove(key);

@@ -6,6 +6,8 @@ internal enum FileStep
 {
     // A parent was set aside, or a folder handles this path.
     Skip,
+    // A link or special file that exists only on this computer: never synced, and nothing on either side to protect.
+    SkipUnsupported,
     // Drop the path from the baseline: ignored, or gone from both sides.
     Forget,
     // The cloud entry may be this app's own unfinished upload; the pass must check its saved session first.
@@ -58,6 +60,11 @@ internal static class FileReconciler
         if (!ownedUploadChecked && there?.Key == key && there.Remote?.UploadSessionId != null)
         {
             return new FileDecision(FileStep.CheckOwnedUpload, Previous: previous, Here: here, There: there);
+        }
+
+        if (here?.Kind == NodeKind.Unsupported && there == null && previous == null && !view.Local.Collisions.Contains(key))
+        {
+            return new FileDecision(FileStep.SkipUnsupported);
         }
 
         if (here?.Kind == NodeKind.Unsupported || there?.Kind == NodeKind.Unsupported)

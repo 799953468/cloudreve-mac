@@ -82,6 +82,7 @@
     "conflictCloudFolderReplaced": "云端这个文件夹已经换成了另一个文件夹，为避免误删，暂停同步它。",
     "conflictDirectoryNotEmpty": "一边删除了这个文件夹，另一边里面还有新的或改过的内容。",
     "conflictUncertainMove": "无法确认的移动或改名。确认两边位置后会重新同步。",
+    "conflictUploadInProgress": "另一台设备还在上传这个文件。超过一天没完成的上传会被自动清理。",
     "conflictUnverifiedIdentity": "旧版本留下的同步记录不足以安全处理这个改动。",
     "keepLocal": "以本地为准",
     "keepRemote": "以云端为准",

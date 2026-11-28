@@ -27,6 +27,20 @@ internal readonly record struct DirectoryDecision(DirectoryAction Action, Confli
     }
 }
 
+// Every identity seen by this scan or tracked by the baseline, on each side. A folder recreated in place may be adopted
+// only when its old identity is nowhere in the scan (it did not move) and its new one is not tracked (nothing moved there).
+internal sealed record IdentitySets(HashSet<string> ScannedLocal, HashSet<string> TrackedLocal, HashSet<string> ScannedRemote, HashSet<string> TrackedRemote)
+{
+    internal static IdentitySets From(ReconcileView view)
+    {
+        return new IdentitySets(
+            view.Local.Nodes.Values.Where(node => node.LocalId != null).Select(node => node.LocalId!).ToHashSet(),
+            view.Baseline.Values.Where(entry => entry.LocalId != null).Select(entry => entry.LocalId!).ToHashSet(),
+            view.Remote.Nodes.Values.Where(node => !string.IsNullOrEmpty(node.Remote?.Id)).Select(node => node.Remote!.Id!).ToHashSet(),
+            view.Baseline.Values.Where(entry => !string.IsNullOrEmpty(entry.RemoteId)).Select(entry => entry.RemoteId!).ToHashSet());
+    }
+}
+
 internal static class DirectoryReconciler
 {
     // Build tools and package managers delete and recreate their output folders, which gives them new identities.
@@ -38,6 +52,15 @@ internal static class DirectoryReconciler
         return previous.IsDirectory && previous.LocalId != null && here.Kind == NodeKind.Directory && here.LocalId != null &&
                here.LocalId != previous.LocalId && Volume(here.LocalId) == Volume(previous.LocalId) &&
                !string.IsNullOrEmpty(previous.RemoteId) && there?.Kind == NodeKind.Directory && there.Remote?.Id == previous.RemoteId;
+    }
+
+    // The cloud counterpart: another client deleted and recreated the folder, so it has a new cloud ID, while the local
+    // folder is still the one last synced.
+    internal static bool MayBeRecreatedInCloud(FileBaseline previous, PairNode? here, PairNode there)
+    {
+        return previous.IsDirectory && !string.IsNullOrEmpty(previous.RemoteId) && previous.LocalId != null &&
+               there.Kind == NodeKind.Directory && !string.IsNullOrEmpty(there.Remote?.Id) && there.Remote.Id != previous.RemoteId &&
+               here?.Kind == NodeKind.Directory && here.LocalId == previous.LocalId;
     }
 
     private static string Volume(string localId)
@@ -87,9 +110,7 @@ internal static class DirectoryReconciler
         }
     }
 
-    // scannedIds and trackedIds are every local identity in this scan and in the baseline. A recreated directory must
-    // match neither: the old identity elsewhere means the folder moved, and a tracked new identity means another folder moved here.
-    internal static DirectoryDecision Decide(string key, ReconcileView view, bool adoptRecreated, HashSet<string> scannedIds, HashSet<string> trackedIds)
+    internal static DirectoryDecision Decide(string key, ReconcileView view, bool adoptRecreated, IdentitySets ids)
     {
         if (view.Rules.Excludes(key, true))
         {
@@ -115,12 +136,13 @@ internal static class DirectoryReconciler
         }
 
         if (here != null && previous?.LocalId != null && here.LocalId != previous.LocalId &&
-            !(adoptRecreated && MayBeRecreatedInPlace(previous, here, there) && !scannedIds.Contains(previous.LocalId) && !trackedIds.Contains(here.LocalId!)))
+            !(adoptRecreated && MayBeRecreatedInPlace(previous, here, there) && !ids.ScannedLocal.Contains(previous.LocalId) && !ids.TrackedLocal.Contains(here.LocalId!)))
         {
             return DirectoryDecision.Conflict(ConflictCause.DirectoryReplaced);
         }
 
-        if (there != null && previous?.RemoteId != null && there.Remote?.Id != previous.RemoteId)
+        if (there != null && previous?.RemoteId != null && there.Remote?.Id != previous.RemoteId &&
+            !(adoptRecreated && MayBeRecreatedInCloud(previous, here, there) && !ids.ScannedRemote.Contains(previous.RemoteId) && !ids.TrackedRemote.Contains(there.Remote!.Id!)))
         {
             return DirectoryDecision.Conflict(ConflictCause.CloudFolderReplaced);
         }

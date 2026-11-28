@@ -220,6 +220,71 @@ public sealed partial class FolderPairSyncTests
         Assert.Equal("Escalated:RemoteItemDisappeared", attempt.FullReason);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AbandonedUploadPlaceholderIsCancelledAfterADay(bool stale)
+    {
+        string path = Path.Combine(pair.Local, "upload");
+        File.WriteAllText(path, "abcdef");
+        site.UploadChunkSize = 3;
+        site.InterruptPart = 1;
+        await Assert.ThrowsAsync<HttpRequestException>(() => RunAsync());
+        site.InterruptPart = null;
+        // The client lost track of its upload, as after a crash: the placeholder now belongs to nobody it knows.
+        TransferQueue.Open(store.TransferDirectory(pair)).Reconcile([]);
+        site.Modified[Root + "/upload"] = site.Now.AddHours(stale ? -25 : -1);
+
+        var result = await RunAsync(attempt: new PairScanAttempt { ServerTime = site.Now });
+        if (!stale)
+        {
+            Assert.Equal(ConflictCause.UploadInProgress, result.Causes!["upload"]);
+            Assert.Equal(0, site.SessionsCancelled);
+            return;
+        }
+
+        Assert.Empty(result.Conflicts);
+        Assert.Equal(1, site.SessionsCancelled);
+        Assert.Equal(["upload"], result.DeferredPaths);
+        // The retry finds an ordinary missing file and uploads it.
+        Assert.Equal(1, (await RunAsync(scope: new PairScanScope(["upload"]))).Uploaded);
+        Assert.Equal("abcdef", site.Files[Root + "/upload"].Text);
+    }
+
+    [Fact]
+    public async Task FolderRecreatedInTheCloudKeepsSyncingFileByFile()
+    {
+        site.Folders.Add(Root + "/deps");
+        site.Ids[Root + "/deps"] = "old-folder";
+        site.Put(Root + "/deps/same", "same");
+        site.Put(Root + "/deps/gone", "gone");
+        await FullPassAsync();
+        // Another computer deleted and recreated the folder: new folder ID, files uploaded again.
+        site.Ids[Root + "/deps"] = "new-folder";
+        site.Files.Remove(Root + "/deps/gone");
+        site.Put(Root + "/deps/same", "same");
+
+        var result = await FullPassAsync();
+        Assert.Empty(result.Conflicts);
+        Assert.Equal("new-folder", store.ReadBaseline(pair)["deps"].RemoteId);
+        Assert.Equal("same", File.ReadAllText(Path.Combine(pair.Local, "deps", "same")));
+        Assert.False(File.Exists(Path.Combine(pair.Local, "deps", "gone")));
+        Assert.Contains("gone", Directory.GetFiles(Path.Combine(pair.Local, PairInventory.Recovery), "*", SearchOption.AllDirectories).Select(File.ReadAllText));
+    }
+
+    [Fact]
+    public async Task LocalOnlyLinksAreSkippedInsteadOfReportedAsConflicts()
+    {
+        Assert.SkipUnless(OperatingSystem.IsMacOS(), "Creating symbolic links needs no privileges on macOS.");
+        File.WriteAllText(Path.Combine(pair.Local, "target"), "target");
+        File.CreateSymbolicLink(Path.Combine(pair.Local, "link"), "target");
+        var result = await RunAsync();
+        Assert.Empty(result.Conflicts);
+        Assert.Equal(["link"], result.Skipped);
+        Assert.Equal(1, result.Uploaded);
+        Assert.False(site.Files.ContainsKey(Root + "/link"));
+    }
+
     [Fact]
     public async Task CoordinatorCatchesUpAtStartupAndVerifiesWhenDue()
     {

@@ -68,6 +68,12 @@ internal sealed class PairScanScope
             {
                 return "LocalDirectoryRecreated";
             }
+
+            if (baseline[key] is { IsDirectory: true } known && remote.Nodes.TryGetValue(key, out var there) && there.Key == key &&
+                DirectoryReconciler.MayBeRecreatedInCloud(known, local.Nodes.GetValueOrDefault(key), there) && !Within(blocked, key))
+            {
+                return "CloudDirectoryRecreated";
+            }
         }
 
         var replaced = ReplacedAncestors(baseline, local);
