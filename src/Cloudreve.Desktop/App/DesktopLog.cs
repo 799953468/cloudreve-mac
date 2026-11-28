@@ -12,12 +12,14 @@ internal static class DesktopLog
         var config = new LoggerConfiguration().MinimumLevel.ControlledBy(level ?? new LoggingLevelSwitch());
         if (logToFile)
         {
-            config.WriteTo.File(Path.Combine(directory, "desktop-.log"),
+            // File I/O runs on a background worker so UI and sync threads never block on disk writes.
+            // Pending events are flushed when the logger is disposed (Log.CloseAndFlush on exit).
+            config.WriteTo.Async(sink => sink.File(Path.Combine(directory, "desktop-.log"),
                 outputTemplate: FailureLog.OutputTemplate,
                 rollingInterval: RollingInterval.Day,
                 fileSizeLimitBytes: 5 * 1024 * 1024,
                 rollOnFileSizeLimit: true,
-                retainedFileCountLimit: retainedFiles);
+                retainedFileCountLimit: retainedFiles));
         }
 
         return config.CreateLogger();
