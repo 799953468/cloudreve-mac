@@ -91,6 +91,12 @@ internal static class FileReconciler
         var file = there?.Remote;
         string? hash = here?.Hash;
         var action = SyncDecision.ForFile(previous, hash, file?.Version);
+        if (action == SyncAction.Download && hash != null && hash == previous?.LocalHash && ReconcileView.Within(view.RebuiltInCloud, key))
+        {
+            // Matching contents only refresh the baseline; different ones become an ordinary content conflict.
+            action = SyncAction.CompareContents;
+        }
+
         return action switch
         {
             SyncAction.Unchanged => previous!.LocalId != here!.LocalId || previous.LocalGeneration != here.LocalGeneration || previous.RemoteId != file!.Id

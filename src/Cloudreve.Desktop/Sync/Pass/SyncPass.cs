@@ -305,6 +305,11 @@ internal sealed class SyncPass(FolderPairStore store, FolderPair pair, PairOpera
             }
 
             var current = new FileBaseline("", "", local.Nodes[key].LocalId, remote.Nodes[key].Remote!.Id, true);
+            if (baseline.GetValueOrDefault(key)?.RemoteId is { } adopted && adopted != current.RemoteId)
+            {
+                view.RebuiltInCloud.Add(key);
+            }
+
             if (current != baseline.GetValueOrDefault(key))
             {
                 baseline[key] = current;

@@ -14,6 +14,9 @@ internal sealed class ReconcileView(Dictionary<string, FileBaseline> baseline, P
     internal ConflictSet Conflicts { get; } = conflicts;
     // Paths whose whole subtree this pass leaves alone.
     internal HashSet<string> Blocked { get; } = blocked;
+    // Folders adopted although another client deleted and recreated them in the cloud. Their files usually came back
+    // with the same contents under new versions, so unchanged local copies are compared instead of replaced.
+    internal HashSet<string> RebuiltInCloud { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     internal static bool Within(HashSet<string> roots, string key)
     {

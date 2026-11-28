@@ -257,19 +257,28 @@ public sealed partial class FolderPairSyncTests
         site.Folders.Add(Root + "/deps");
         site.Ids[Root + "/deps"] = "old-folder";
         site.Put(Root + "/deps/same", "same");
+        site.Put(Root + "/deps/changed", "before");
         site.Put(Root + "/deps/gone", "gone");
         await FullPassAsync();
-        // Another computer deleted and recreated the folder: new folder ID, files uploaded again.
+        // Another computer deleted and recreated the folder: new folder ID, files uploaded again as new versions.
         site.Ids[Root + "/deps"] = "new-folder";
         site.Files.Remove(Root + "/deps/gone");
         site.Put(Root + "/deps/same", "same");
+        site.Put(Root + "/deps/changed", "after");
+        var sameVersion = site.Files[Root + "/deps/same"].Version;
 
         var result = await FullPassAsync();
-        Assert.Empty(result.Conflicts);
-        Assert.Equal("new-folder", store.ReadBaseline(pair)["deps"].RemoteId);
-        Assert.Equal("same", File.ReadAllText(Path.Combine(pair.Local, "deps", "same")));
+        var baseline = store.ReadBaseline(pair);
+        Assert.Equal("new-folder", baseline["deps"].RemoteId);
+        // Same contents under a new version: recorded without touching the local copy or keeping a recovery copy.
+        Assert.Equal(sameVersion, baseline["deps/same"].RemoteVersion);
+        Assert.Equal(0, result.Downloaded);
+        // Different contents are not overwritten silently; they become an ordinary content conflict.
+        Assert.Equal(ConflictCause.ContentsDiffer, Assert.Single(result.Causes!).Value);
+        Assert.Equal("before", File.ReadAllText(Path.Combine(pair.Local, "deps", "changed")));
         Assert.False(File.Exists(Path.Combine(pair.Local, "deps", "gone")));
-        Assert.Contains("gone", Directory.GetFiles(Path.Combine(pair.Local, PairInventory.Recovery), "*", SearchOption.AllDirectories).Select(File.ReadAllText));
+        var recovered = Directory.GetFiles(Path.Combine(pair.Local, PairInventory.Recovery), "*", SearchOption.AllDirectories).Select(File.ReadAllText).ToArray();
+        Assert.Equal(["gone"], recovered);
     }
 
     [Fact]
