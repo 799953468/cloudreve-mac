@@ -1,0 +1,35 @@
+<Window xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:d="using:Cloudreve.Desktop"
+    x:Class="Cloudreve.Desktop.SettingsWindow" x:ClassModifier="internal" Title="{d:Tr settings.title}" Width="700" Height="500" MinWidth="600" MinHeight="400"
+    WindowStartupLocation="CenterScreen" Background="{DynamicResource HeaderFill}" Foreground="{DynamicResource Ink}">
+  <Window.Styles><StyleInclude Source="/Styles/DesktopControls.axaml" /></Window.Styles>
+  <Grid ColumnDefinitions="200,*">
+    <Border Background="{DynamicResource SidebarFill}" BorderBrush="{DynamicResource Divider}" BorderThickness="0,0,1,0"><StackPanel>
+      <d:BrandMark Height="24" Margin="16,16,8,16" />
+      <ListBox x:Name="Navigation" SelectedIndex="0" Background="Transparent" Margin="8,0">
+        <ListBoxItem><StackPanel Orientation="Horizontal" Spacing="16"><PathIcon Data="{StaticResource DriveIcon}" Width="20" /><TextBlock Text="{d:Tr settings.drives}" /></StackPanel></ListBoxItem>
+        <ListBoxItem><StackPanel Orientation="Horizontal" Spacing="16"><PathIcon Data="{StaticResource GearIcon}" Width="20" /><TextBlock Text="{d:Tr settings.general}" /></StackPanel></ListBoxItem>
+        <ListBoxItem><StackPanel Orientation="Horizontal" Spacing="16"><PathIcon Data="{StaticResource InfoIcon}" Width="20" /><TextBlock Text="{d:Tr settings.about}" /></StackPanel></ListBoxItem>
+      </ListBox></StackPanel></Border>
+    <ScrollViewer x:Name="Scroll" Grid.Column="1" HorizontalScrollBarVisibility="Disabled"><StackPanel Margin="24,20,24,24" Spacing="16">
+      <StackPanel x:Name="DrivePage" Classes="reveal" Spacing="14">
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+          <TextBlock Classes="pageTitle" Text="{d:Tr settings.drives}" VerticalAlignment="Center" />
+          <Button Grid.Column="1" x:Name="AddButton" Classes="primary" MinHeight="34" Padding="12,4" />
+        </Grid>
+        <StackPanel x:Name="Cards" Spacing="12" />
+      </StackPanel>
+      <StackPanel x:Name="GeneralPage" Classes="reveal" Spacing="12" IsVisible="False" />
+      <StackPanel x:Name="AboutPage" Classes="reveal" Spacing="14" IsVisible="False">
+        <TextBlock Classes="pageTitle" Text="{d:Tr settings.about}" />
+        <StackPanel Orientation="Horizontal" Spacing="12">
+          <Image Source="/Assets/cloudreve.png" Width="48" Height="48" />
+          <StackPanel VerticalAlignment="Center">
+            <TextBlock Text="Cloudreve Client" FontSize="18" FontWeight="SemiBold" />
+            <TextBlock x:Name="VersionLabel" Classes="secondary" />
+          </StackPanel>
+        </StackPanel>
+      </StackPanel>
+      <TextBlock x:Name="ErrorMessage" Foreground="{DynamicResource DangerInk}" IsVisible="False" TextWrapping="Wrap" />
+    </StackPanel></ScrollViewer>
+  </Grid>
+</Window>

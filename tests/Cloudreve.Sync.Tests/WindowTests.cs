@@ -451,7 +451,7 @@ public sealed class WindowTests : IDisposable
                 toggle.IsChecked = true;
                 Assert.False(toggle.IsChecked);
                 Assert.Equal(1, service.SettingsOpened);
-                Assert.Contains(DesktopText.Get("settings.autoStartApproval"), Labels(settings.GeneralPage));
+                Assert.Contains(UiText.Get("settings.autoStartApproval"), Labels(settings.GeneralPage));
                 toggle.IsChecked = true;
                 Assert.Equal(2, service.SettingsOpened);
                 Assert.Equal([true, false, true], service.Writes);
