@@ -192,6 +192,7 @@
     "listingIncomplete": "Incomplete folder listing. Try again later.",
     "folderChangedWhileListing": "The folder changed while it was being read.",
     "repeatedPage": "The server repeated a pagination position.",
+    "serverTimeMissing": "The server did not report its time, so sync progress cannot be tracked.",
     "pairedFolderUnverified": "Could not verify the paired cloud folder.",
     "invalidFileName": "Invalid file name.",
     "invalidFolder": "Invalid cloud folder.",

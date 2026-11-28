@@ -21,6 +21,12 @@ internal sealed class PairScanScope
         }
     }
 
+    // Paths known to be deleted rather than moved, so their disappearance does not need a full scan to explain it.
+    // Local ones were checked against a complete local inventory: their identity is nowhere else on disk. Cloud ones
+    // were found in the trash with the identity the baseline knew; a trashed folder confirms everything below it.
+    internal IReadOnlySet<string> ConfirmedLocalDeletions { get; init; } = new HashSet<string>();
+    internal IReadOnlySet<string> ConfirmedRemoteDeletions { get; init; } = new HashSet<string>();
+
     internal IEnumerable<string> Targets
     {
         get { return targets; }
@@ -102,12 +108,12 @@ internal sealed class PairScanScope
             }
 
             // The database returned only visited paths. A lone disappearance can be one half of a move.
-            if (!local.Nodes.ContainsKey(key) && known.LocalId != null && !localIds.Contains(known.LocalId))
+            if (!local.Nodes.ContainsKey(key) && known.LocalId != null && !localIds.Contains(known.LocalId) && !ConfirmedLocalDeletions.Contains(key))
             {
                 return "LocalItemDisappeared";
             }
 
-            if (!remote.Nodes.ContainsKey(key) && known.RemoteId != null && !remoteIds.Contains(known.RemoteId))
+            if (!remote.Nodes.ContainsKey(key) && known.RemoteId != null && !remoteIds.Contains(known.RemoteId) && !ConfirmedRemoteDeletion(key))
             {
                 return "RemoteItemDisappeared";
             }
@@ -115,6 +121,19 @@ internal sealed class PairScanScope
 
         // Still checked for replaced trees: a replacement that came from elsewhere in the pair is a move.
         return database.HasOutsideIdentity(baseline, local, remote) ? "IdentityMovedFromOutsideScope" : null;
+    }
+
+    private bool ConfirmedRemoteDeletion(string key)
+    {
+        for (string? path = key; !string.IsNullOrEmpty(path); path = PairKey.Parent(path))
+        {
+            if (ConfirmedRemoteDeletions.Contains(path))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool RecreatedCandidate(string key, Dictionary<string, FileBaseline> baseline, PairInventory local, PairInventory remote)

@@ -27,6 +27,12 @@ internal sealed class PairScanAttempt
     internal PairScanScope? Scope { get; set; }
     // Why this pass scanned the whole pair. Set by the caller for a full request and here when a path scan escalates.
     internal string? FullReason { get; set; }
+    // Server time taken before the pass started. A pass that covered every cloud change before it saves it as the change cursor.
+    internal DateTimeOffset? ServerTime { get; set; }
+    // Why a catch-up planned this pass's scope; null for a watcher path scan or a full scan.
+    internal string? CatchUpReason { get; set; }
+    // The catch-up scope also includes every cloud change since the previous cursor.
+    internal bool CoversCloudChanges { get; set; }
     internal long ElapsedMs { get { return timer.ElapsedMilliseconds; } }
 }
 
@@ -44,6 +50,22 @@ internal sealed class FolderPairSync(FolderPairStore store, FolderPair pair, Dri
     internal Task<PairSyncResult> RunAsync(CancellationToken cancel, PairScanAttempt? attempt = null, PairScanScope? scope = null)
     {
         return new SyncPass(store, pair, Ops, resources, activity, beginFullRemoteInventory, attempt ?? new PairScanAttempt(), scope).RunAsync(cancel);
+    }
+
+    // Plans a pass covering what changed since the last complete one; see CatchUpPlanner.
+    internal Task<CatchUpPlan> PlanCatchUpAsync(bool includeLocal, bool includeCloud, IEnumerable<string> extraPaths, DateTimeOffset serverNow, CancellationToken cancel)
+    {
+        return CatchUpPlanner.PlanAsync(store, pair, drive, resources, activity, includeLocal, includeCloud, extraPaths, serverNow, beginFullRemoteInventory, cancel);
+    }
+
+    // Server time when the last full scan of this pair started, if one has been recorded.
+    internal DateTimeOffset? ReadLastFullScan()
+    {
+        using (store.Lock(pair))
+        using (var database = store.OpenBaseline(pair))
+        {
+            return CatchUpPlanner.ReadCursor(database, CatchUpPlanner.LastFullState) is { } seconds ? DateTimeOffset.FromUnixTimeSeconds(seconds) : null;
+        }
     }
 
     // Within this margin the two times cannot say which side is newer: FAT stores 2-second times, and an upload

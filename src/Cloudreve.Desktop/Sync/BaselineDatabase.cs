@@ -43,6 +43,12 @@ internal sealed class BaselineDatabase : IDisposable
                         throw new InvalidDataException(UiText.Get("pair.invalidBaseline"));
                 }
             }
+            // Sync state beside the baseline. Older clients ignore the table, so it needs no schema version of its own.
+            using (var state = Command("CREATE TABLE IF NOT EXISTS state (name TEXT PRIMARY KEY, value TEXT NOT NULL)"))
+            {
+                state.ExecuteNonQuery();
+            }
+
             // The old client must never use a stale common ancestor after the new database has advanced.
             if (File.Exists(legacyPath))
             {
@@ -97,6 +103,30 @@ internal sealed class BaselineDatabase : IDisposable
         var command = connection.CreateCommand();
         command.CommandText = sql;
         return command;
+    }
+
+    internal string? ReadState(string name)
+    {
+        using (var command = Command("SELECT value FROM state WHERE name = $name"))
+        {
+            command.Parameters.AddWithValue("$name", name);
+            return command.ExecuteScalar() as string;
+        }
+    }
+
+    // A null value removes the entry.
+    internal void WriteState(string name, string? value)
+    {
+        using (var command = Command(value == null ? "DELETE FROM state WHERE name = $name" : "INSERT OR REPLACE INTO state (name, value) VALUES ($name, $value)"))
+        {
+            command.Parameters.AddWithValue("$name", name);
+            if (value != null)
+            {
+                command.Parameters.AddWithValue("$value", value);
+            }
+
+            command.ExecuteNonQuery();
+        }
     }
 
     internal bool HasLegacyIds()

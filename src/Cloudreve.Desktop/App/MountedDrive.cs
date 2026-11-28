@@ -47,13 +47,11 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
     private readonly object conflictGate = new();
     private Dictionary<string, PairConflict> conflicts = new(StringComparer.OrdinalIgnoreCase);
     private PairConflict[] conflictList = [];
-    // A pass and a conflict resolution both take the pair lock, which does not wait; take turns here instead.
-    private readonly SemaphoreSlim passGate = new(1, 1);
     private FolderPairSync? engine;
+    private PairSyncCoordinator? coordinator;
     private ILogger? pairLogger;
     // Conflicts the newer-version rule already declined or failed to resolve; a changed conflict is a new record and is tried again.
     private readonly HashSet<PairConflict> autoDeclined = [];
-    private bool runningPass;
     private bool remoteUnavailable;
 
     internal SessionFileStore Store { get; } = store;
@@ -81,7 +79,7 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
 
     internal TrayState ReadTrayState()
     {
-        return Activity.ReadTrayState(runningPass, Pair == null || Expired || remoteUnavailable);
+        return Activity.ReadTrayState(coordinator?.Running == true, Pair == null || Expired || remoteUnavailable);
     }
 
     internal void Bind(DriveSession account)
@@ -93,6 +91,7 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
         PushLost = false;
         remoteUnavailable = false;
         engine = null;
+        coordinator = null;
         pairLogger = null;
         autoDeclined.Clear();
         lock (conflictGate)
@@ -129,7 +128,13 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
             watcher = wake.WatchLocal(Pair.Local);
             ILogger logger = Log.Logger.ForContext("PairId", Pair.Marker);
             pairLogger = logger;
-            workers = Task.WhenAll(capacity, ScanAsync(engine, wake, logger, lifetime.Token),
+            var cancel = lifetime.Token;
+            coordinator = new PairSyncCoordinator(engine, wake, client, logger)
+            {
+                Completed = (result, attempt) => OnPassCompletedAsync(result, attempt, logger, cancel),
+                Failed = (ex, attempt) => OnPassFailed(ex, attempt, logger)
+            };
+            workers = Task.WhenAll(capacity, coordinator.RunAsync(cancel),
                 wake.WatchRemoteAsync(client, Pair.Remote, lifetime.Token, connected => { PushLost = !connected; }, logger));
         }
     }
@@ -162,81 +167,48 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
         }
     }
 
-    private async Task ScanAsync(FolderPairSync engine, PairWake signal, ILogger logger, CancellationToken cancel)
+    private async Task OnPassCompletedAsync(PairSyncResult result, PairScanAttempt attempt, ILogger logger, CancellationToken cancel)
     {
-        PairScanScope? scope = null;
-        string? fullReason = "Startup";
-        try
+        remoteUnavailable = false;
+        // Passes that changed nothing stay at Debug so periodic scans do not flood the log.
+        var summaryLevel = result.Uploaded + result.Downloaded + result.Removed + result.Conflicts.Count > 0 ? LogEventLevel.Information : LogEventLevel.Debug;
+        ScanContext(logger, attempt).Write(summaryLevel, "Folder pair scan finished in {ElapsedMs} ms: {Uploaded} uploaded, {Downloaded} downloaded, {Removed} removed, {Conflicts} conflicts, {DeferredDirectories} directories deferred, {DeferredFiles} files deferred",
+            attempt.ElapsedMs, result.Uploaded, result.Downloaded, result.Removed, result.Conflicts.Count, result.DeferredDirectories, result.DeferredFiles);
+        var added = UpdateConflicts(result, attempt.Scope, logger);
+        if (Program.Preferences.Current.AutoResolveNewer && engine != null)
         {
-            while (!cancel.IsCancellationRequested)
-            {
-                bool retry = false;
-                var attempt = new PairScanAttempt { FullReason = scope == null ? fullReason : null };
-                PairScanScope? retryScope = null;
-                try
-                {
-                    PairSyncResult result;
-                    await passGate.WaitAsync(cancel);
-                    try
-                    {
-                        runningPass = true;
-                        result = await Task.Run(() => engine.RunAsync(cancel, attempt, scope), cancel);
-                    }
-                    finally
-                    {
-                        passGate.Release();
-                    }
-
-                    remoteUnavailable = false;
-                    // The pass finished everything else, so even after a full scan only the deferred paths need another look.
-                    retry = result.DeferredPaths is { Count: > 0 };
-                    retryScope = retry ? new PairScanScope(result.DeferredPaths!) : null;
-                    // Passes that changed nothing stay at Debug so periodic scans do not flood the log.
-                    var summaryLevel = result.Uploaded + result.Downloaded + result.Removed + result.Conflicts.Count > 0 ? LogEventLevel.Information : LogEventLevel.Debug;
-                    logger.ForContext("ScanScope", attempt.Scope == null ? "Full" : "Paths").ForContext("FullScanReason", attempt.Scope == null ? attempt.FullReason : null).Write(summaryLevel, "Folder pair scan finished in {ElapsedMs} ms: {Uploaded} uploaded, {Downloaded} downloaded, {Removed} removed, {Conflicts} conflicts, {DeferredDirectories} directories deferred, {DeferredFiles} files deferred",
-                        attempt.ElapsedMs, result.Uploaded, result.Downloaded, result.Removed, result.Conflicts.Count, result.DeferredDirectories, result.DeferredFiles);
-                    var added = UpdateConflicts(result, attempt.Scope, logger);
-                    if (Program.Preferences.Current.AutoResolveNewer)
-                    {
-                        await ResolveNewerAsync(engine, logger, cancel);
-                    }
-
-                    // Only alert about conflicts that are still waiting for the user.
-                    var open = Conflicts.ToHashSet();
-                    if (Program.Preferences.Current.ConflictAlerts && added.Any(open.Contains))
-                    {
-                        Notice?.Invoke(UiText.Get("app.syncConflictNotice"));
-                    }
-                }
-                catch (Exception ex) when (!cancel.IsCancellationRequested)
-                {
-                    retry = true;
-                    retryScope = attempt.Scope;
-                    if (ex is HttpRequestException request)
-                    {
-                        remoteUnavailable = request.StatusCode == null || (int)request.StatusCode >= 500;
-                    }
-                    else if (ex is OperationCanceledException)
-                    {
-                        remoteUnavailable = true;
-                    }
-                    CheckExpiry(ex);
-                    logger.ForContext("Stage", attempt.Stage).ForContext("ElapsedMs", attempt.ElapsedMs)
-                        .ForContext("ScanScope", attempt.Scope == null ? "Full" : "Paths").ForContext("FullScanReason", attempt.Scope == null ? attempt.FullReason : null)
-                        .WriteFailure(LogEventLevel.Warning, "Synchronize folder pair", ex);
-                }
-                finally
-                {
-                    runningPass = false;
-                }
-
-                scope = await signal.WaitForNextScanAsync(retry, cancel, retryScope);
-                fullReason = signal.LastFullReason;
-            }
+            await ResolveNewerAsync(engine, logger, cancel);
         }
-        catch (Exception) when (cancel.IsCancellationRequested)
+
+        // Only alert about conflicts that are still waiting for the user.
+        var open = Conflicts.ToHashSet();
+        if (Program.Preferences.Current.ConflictAlerts && added.Any(open.Contains))
         {
+            Notice?.Invoke(UiText.Get("app.syncConflictNotice"));
         }
+    }
+
+    private void OnPassFailed(Exception ex, PairScanAttempt attempt, ILogger logger)
+    {
+        if (ex is HttpRequestException request)
+        {
+            remoteUnavailable = request.StatusCode == null || (int)request.StatusCode >= 500;
+        }
+        else if (ex is OperationCanceledException)
+        {
+            remoteUnavailable = true;
+        }
+
+        CheckExpiry(ex);
+        ScanContext(logger, attempt).ForContext("Stage", attempt.Stage).ForContext("ElapsedMs", attempt.ElapsedMs)
+            .WriteFailure(LogEventLevel.Warning, "Synchronize folder pair", ex);
+    }
+
+    private static ILogger ScanContext(ILogger logger, PairScanAttempt attempt)
+    {
+        return logger.ForContext("ScanScope", attempt.Scope == null ? "Full" : attempt.CatchUpReason != null ? "CatchUp" : "Paths")
+            .ForContext("FullScanReason", attempt.Scope == null ? attempt.FullReason : null)
+            .ForContext("CatchUpReason", attempt.CatchUpReason);
     }
 
     // Replaces the conflicts this pass covered. Returns the ones that are new.
@@ -357,19 +329,15 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
 
         logger.Information("Resolving sync conflict at {ConflictKey} ({ConflictReason}) with {ConflictChoice}", conflict.Key, conflict.Reason, choice);
         string? copyKey;
-        await passGate.WaitAsync(cancel);
         try
         {
-            copyKey = await Task.Run(() => current.ResolveConflictAsync(conflict.Choice, choice, cancel), cancel);
+            var work = () => Task.Run(() => current.ResolveConflictAsync(conflict.Choice, choice, cancel), cancel);
+            copyKey = coordinator == null ? await work() : await coordinator.ExclusiveAsync(work, cancel);
         }
         catch (Exception ex)
         {
             logger.ForContext("ConflictKey", conflict.Key).ForContext("ConflictChoice", choice).WriteFailure(LogEventLevel.Warning, "Resolve sync conflict", ex);
             throw;
-        }
-        finally
-        {
-            passGate.Release();
         }
 
         lock (conflictGate)

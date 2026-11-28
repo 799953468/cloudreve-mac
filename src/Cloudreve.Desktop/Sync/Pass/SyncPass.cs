@@ -49,9 +49,11 @@ internal sealed class SyncPass(FolderPairStore store, FolderPair pair, PairOpera
         using (database = store.OpenBaseline(pair))
         {
             await InventoryAsync(cancel);
+            bool completed = false;
             try
             {
                 await ReconcileAsync(cancel);
+                completed = true;
             }
             catch (OperationCanceledException) when (cancel.IsCancellationRequested)
             {
@@ -65,7 +67,7 @@ internal sealed class SyncPass(FolderPairStore store, FolderPair pair, PairOpera
             }
             finally
             {
-                await CheckpointAsync();
+                await CheckpointAsync(completed);
             }
 
             return new PairSyncResult(uploaded, downloaded, removed, conflicts.Keys.ToArray(), choices, deferred.Count,
@@ -569,7 +571,7 @@ internal sealed class SyncPass(FolderPairStore store, FolderPair pair, PairOpera
     }
 
     // If checkpointing itself fails, it is the exception the caller will receive.
-    private async Task CheckpointAsync()
+    private async Task CheckpointAsync(bool completed)
     {
         string previousStage = attempt.Stage;
         attempt.Stage = "Checkpoint";
@@ -586,6 +588,8 @@ internal sealed class SyncPass(FolderPairStore store, FolderPair pair, PairOpera
             database.SaveChanges(original, baseline);
         }
 
+        SaveProgress(completed);
+
         queue.Complete(finished);
         activity?.SetPending(queue);
         if (activity != null)
@@ -594,5 +598,26 @@ internal sealed class SyncPass(FolderPairStore store, FolderPair pair, PairOpera
         }
 
         attempt.Stage = previousStage;
+    }
+
+    // Advances the change cursor only after a pass that saw every cloud change before attempt.ServerTime: a full scan,
+    // or a catch-up of cloud changes. A deferred folder may hide cloud changes this pass never applied, so it keeps the old cursor.
+    private void SaveProgress(bool completed)
+    {
+        if (!completed || attempt.ServerTime is not { } time)
+        {
+            return;
+        }
+
+        bool full = attempt.Scope == null;
+        if (deferred.Count == 0 && (full || attempt.CoversCloudChanges))
+        {
+            CatchUpPlanner.WriteCursor(database, CatchUpPlanner.CursorState, time - CatchUpPlanner.CursorMargin);
+        }
+
+        if (full)
+        {
+            CatchUpPlanner.WriteCursor(database, CatchUpPlanner.LastFullState, time);
+        }
     }
 }

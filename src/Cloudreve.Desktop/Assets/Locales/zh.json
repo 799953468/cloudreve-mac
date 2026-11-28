@@ -192,6 +192,7 @@
     "listingIncomplete": "目录列表不完整，请稍后重试。",
     "folderChangedWhileListing": "读取期间目录已变化。",
     "repeatedPage": "服务端重复返回同一分页位置。",
+    "serverTimeMissing": "服务器没有返回时间，无法确定同步进度。",
     "pairedFolderUnverified": "无法确认配对的云端目录。",
     "invalidFileName": "文件名无效。",
     "invalidFolder": "无效的云端目录。",

@@ -26,6 +26,9 @@ internal sealed class PairWake(TimeSpan pollInterval)
     // Why the most recent scan returned by WaitForNextScanAsync covers the whole pair; null for a path scan.
     internal string? LastFullReason { get; private set; }
 
+    // Paths signaled before that scan, kept even when it covers the whole pair, so a catch-up can still visit them.
+    internal IReadOnlyCollection<string> LastPaths { get; private set; } = [];
+
     internal void Signal(string reason = "Requested")
     {
         lock (gate)
@@ -146,6 +149,7 @@ internal sealed class PairWake(TimeSpan pollInterval)
         {
             signals.Reader.TryRead(out _);
             PairScanScope? scope = null;
+            LastPaths = pending.ToArray();
             LastFullReason = full ? fullReason : forcedReason ?? (remoteCatchUp ? "RemoteCatchUp" : null);
             if (LastFullReason != null)
             {

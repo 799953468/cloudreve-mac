@@ -21,6 +21,9 @@ internal sealed record DriveEntry(string Name, string Uri, bool IsFolder, long S
     }
 }
 
+// A soft-deleted item in the cloud trash. RestoreUri is where it lived; Id is the identity it had there.
+internal sealed record TrashedEntry(string Id, string RestoreUri, bool IsFolder);
+
 internal sealed partial class DriveClient(HttpClient api, HttpClient storage, DriveSession initial, Action<DriveSession> persist)
 {
     private readonly SemaphoreSlim refreshLock = new(1, 1);
@@ -244,6 +247,56 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
     internal async Task<DriveEntry> StatAsync(string uri, CancellationToken cancel)
     {
         return ParseEntry(await JsonAsync(HttpMethod.Get, "file/info?uri=" + Uri.EscapeDataString(uri), cancel));
+    }
+
+    // The server's clock from the Date header. Change cursors use it so a skewed local clock cannot skip changes.
+    internal async Task<DateTimeOffset> ServerTimeAsync(CancellationToken cancel)
+    {
+        using (var response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, ApiUri("site/ping")), cancel))
+        {
+            response.EnsureSuccessStatusCode();
+            return response.Headers.Date ?? throw new InvalidDataException(UiText.Get("api.serverTimeMissing"));
+        }
+    }
+
+    // Every file and folder under root, at any depth, modified at or after since (Unix seconds). A rename or move
+    // updates the item it moved, but not the contents of a moved folder.
+    internal Task<List<DriveEntry>> ChangedSinceAsync(string root, long since, CancellationToken cancel)
+    {
+        return ListAsync(root + "?updated_gte=" + since.ToString(CultureInfo.InvariantCulture), cancel);
+    }
+
+    // Items moved to the trash at or after since (Unix seconds). Permanently deleted items are not listed.
+    internal async Task<List<TrashedEntry>> TrashedSinceAsync(long since, CancellationToken cancel)
+    {
+        string path = "file?uri=" + Uri.EscapeDataString("cloudreve://trash?updated_gte=" + since.ToString(CultureInfo.InvariantCulture)) + "&page_size=100";
+        var entries = new List<TrashedEntry>();
+        var requested = new HashSet<string>();
+        string continuation = "";
+        while (requested.Add(continuation))
+        {
+            JsonElement data = await JsonAsync(HttpMethod.Get, path + continuation, cancel);
+            foreach (var file in data.GetProperty("files").EnumerateArray())
+            {
+                if (file.TryGetProperty("metadata", out var metadata) && metadata.ValueKind == JsonValueKind.Object &&
+                    metadata.TryGetProperty("sys:restore_uri", out var restore) && restore.ValueKind == JsonValueKind.String &&
+                    file.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
+                {
+                    entries.Add(new TrashedEntry(id.GetString()!, restore.GetString()!, file.GetProperty("type").GetInt32() == 1));
+                }
+            }
+
+            var pagination = data.GetProperty("pagination");
+            if (pagination.TryGetProperty("next_token", out var token) && !string.IsNullOrEmpty(token.GetString()))
+            {
+                continuation = "&next_page_token=" + Uri.EscapeDataString(token.GetString()!);
+                continue;
+            }
+
+            return entries;
+        }
+
+        throw new InvalidDataException(UiText.Get("api.repeatedPage"));
     }
 
     // Kept out of DriveEntry: a metadata-only change must not invalidate queued transfers that compare entries.

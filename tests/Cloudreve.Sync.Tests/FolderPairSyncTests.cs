@@ -12,7 +12,7 @@ using Xunit;
 
 namespace Cloudreve.Sync.Tests;
 
-public sealed class FolderPairSyncTests : IDisposable
+public sealed partial class FolderPairSyncTests : IDisposable
 {
     private const string Root = "cloudreve://my/work";
     private readonly DirectoryInfo temp = Directory.CreateTempSubdirectory("cloudreve-pair-");
@@ -1841,6 +1841,11 @@ public sealed class FolderPairSyncTests : IDisposable
         internal readonly Dictionary<string, (string Text, string Version)> Files = [];
         internal readonly Dictionary<string, string> Ids = [];
         internal readonly Dictionary<string, DateTimeOffset> Modified = [];
+        // The server clock: Date headers, update stamps for change search, and trash times all come from it.
+        internal DateTimeOffset Now = new(2026, 11, 1, 0, 0, 0, TimeSpan.Zero);
+        internal readonly Dictionary<string, DateTimeOffset> Updated = [];
+        internal readonly List<(string Id, string Uri, bool Folder, DateTimeOffset Time)> Trash = [];
+        internal readonly List<string> Searches = [];
         internal readonly HashSet<string> Folders = [Root];
         internal readonly List<string> TrashRequests = [];
         internal int Requests, Transfers;
@@ -1873,6 +1878,31 @@ public sealed class FolderPairSyncTests : IDisposable
             }
 
             Files[uri] = (text, (++sequence).ToString());
+            Updated[uri] = Now;
+        }
+
+        internal void Touch(string uri)
+        {
+            Updated[uri] = Now;
+        }
+
+        // A deletion made elsewhere, for example in the web UI: the item moves to the trash with its identity.
+        internal void TrashFile(string uri)
+        {
+            bool folder = Folders.Contains(uri);
+            Trash.Add((Ids.GetValueOrDefault(uri, uri), uri, folder, Now));
+            if (folder)
+            {
+                Folders.RemoveWhere(path => path == uri || path.StartsWith(uri + "/", StringComparison.Ordinal));
+                foreach (string path in Files.Keys.Where(path => path.StartsWith(uri + "/", StringComparison.Ordinal)).ToArray())
+                {
+                    Files.Remove(path);
+                }
+            }
+            else
+            {
+                Files.Remove(uri);
+            }
         }
 
         internal void Move(string source, string target)
@@ -1881,6 +1911,8 @@ public sealed class FolderPairSyncTests : IDisposable
             Files.Remove(source);
             Ids[target] = Ids[source];
             Ids.Remove(source);
+            Updated.Remove(source);
+            Updated[target] = Now;
         }
 
         private object Entry(string uri, bool listing = false)
@@ -1961,6 +1993,34 @@ public sealed class FolderPairSyncTests : IDisposable
             }
 
             Assert.NotNull(request.Headers.Authorization);
+            if (uri.AbsolutePath == "/api/v4/site/ping")
+            {
+                var pong = Ok("4.0.0");
+                pong.Headers.Date = Now;
+                return pong;
+            }
+
+            if (request.Method == HttpMethod.Get && uri.AbsolutePath == "/api/v4/file" && query["uri"]!.Contains('?'))
+            {
+                string search = query["uri"]!;
+                Searches.Add(search);
+                string scope = search[..search.IndexOf('?')];
+                long since = long.Parse(HttpUtility.ParseQueryString(search[search.IndexOf('?')..])["updated_gte"]!);
+                if (scope == "cloudreve://trash")
+                {
+                    var trashed = Trash.Where(item => item.Time.ToUnixTimeSeconds() >= since).Select(item => new
+                    {
+                        id = item.Id, name = item.Uri[(item.Uri.LastIndexOf('/') + 1)..], path = "cloudreve://trash/" + Guid.NewGuid().ToString("N"),
+                        type = item.Folder ? 1 : 0, size = 0, metadata = new Dictionary<string, string> { ["sys:restore_uri"] = item.Uri }
+                    }).ToArray();
+                    return Ok(new { files = trashed, pagination = new { } });
+                }
+
+                var found = Files.Keys.Concat(Folders).Distinct().Where(key => key.StartsWith(scope + "/", StringComparison.Ordinal) &&
+                    Updated.TryGetValue(key, out var stamp) && stamp.ToUnixTimeSeconds() >= since).Select(key => Entry(key, listing: true)).ToArray();
+                return Ok(new { files = found, pagination = new { } });
+            }
+
             if (request.Method == HttpMethod.Get && uri.AbsolutePath == "/api/v4/file")
             {
                 string parent = query["uri"]!;
@@ -2043,6 +2103,7 @@ public sealed class FolderPairSyncTests : IDisposable
                 case "/api/v4/file/create":
                     Assert.Equal("folder", body.GetProperty("type").GetString());
                     Assert.True(Folders.Add(body.GetProperty("uri").GetString()!));
+                    Updated[body.GetProperty("uri").GetString()!] = Now;
                     return Ok(null);
                 case "/api/v4/file":
                     Assert.Equal(HttpMethod.Delete, request.Method);
@@ -2054,6 +2115,8 @@ public sealed class FolderPairSyncTests : IDisposable
                     {
                         return new HttpResponseMessage(HttpStatusCode.Conflict);
                     }
+
+                    Trash.Add((Ids.GetValueOrDefault(target, target), target, Folders.Contains(target), Now));
 
                     if (Folders.Remove(target))
                     {
