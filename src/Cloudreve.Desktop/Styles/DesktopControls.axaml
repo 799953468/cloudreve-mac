@@ -74,6 +74,9 @@
   <Style Selector="PathIcon.activityInk">
     <Setter Property="Foreground" Value="{DynamicResource Primary}" />
   </Style>
+  <Style Selector="Border.fileBadge">
+    <Setter Property="BorderBrush" Value="{DynamicResource Paper}" />
+  </Style>
   <Style Selector="PathIcon.mutedIcon">
     <Setter Property="Foreground" Value="{DynamicResource Muted}" />
   </Style>

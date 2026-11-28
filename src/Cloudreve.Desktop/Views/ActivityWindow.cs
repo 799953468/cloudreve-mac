@@ -289,12 +289,7 @@ internal sealed partial class ActivityWindow : Window
     private ActivityRow Row(MountedDrive drive, ActivityEntry entry, bool active)
     {
         var row = new ActivityRow(drive, entry) { ColumnDefinitions = new ColumnDefinitions("32,*"), ColumnSpacing = 8, Margin = new Thickness(16, 12) };
-        var file = new PathIcon
-        {
-            Width = 22, Height = 26, Classes = { active ? "activityInk" : "mutedIcon" },
-            Data = StreamGeometry.Parse("M4 1h10l6 6v16H4z M6 3v18h12V9h-6V3z")
-        };
-        row.Children.Add(file);
+        row.Children.Add(FileIcons.Create(entry.Key, active));
         var lines = new StackPanel { Spacing = 3 };
         Grid.SetColumn(lines, 1);
         row.Children.Add(lines);
