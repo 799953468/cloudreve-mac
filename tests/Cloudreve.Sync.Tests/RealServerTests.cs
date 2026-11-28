@@ -201,6 +201,35 @@ public sealed class RealServerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task CloudDeletionsSyncInAPathScanLikeAPushEvent()
+    {
+        Assert.SkipUnless(Configured, "Set CLOUDREVE_IT_SITE, CLOUDREVE_IT_EMAIL and CLOUDREVE_IT_PASSWORD to run against a real server.");
+        var a = new Device(this, "a");
+        var b = new Device(this, "b");
+        a.Write("single.txt", "single");
+        a.Write("folder/a.txt", "a");
+        a.Write("folder/sub/b.txt", "b");
+        a.Write("stays.txt", "stays");
+        await a.FullAsync();
+        await b.FullAsync();
+
+        File.Delete(a.At("single.txt"));
+        Directory.Delete(a.At("folder"), true);
+        await a.FullAsync();
+
+        // A push event names the deleted paths; the trash confirms them, so no full scan is needed.
+        var attempt = new PairScanAttempt { ServerTime = await client.ServerTimeAsync(Cancel) };
+        var result = await b.Engine().RunAsync(Cancel, attempt, new PairScanScope(["single.txt", "folder"]));
+        Assert.NotNull(attempt.Scope);
+        Assert.Null(attempt.FullReason);
+        Assert.Empty(result.Conflicts);
+        Assert.False(File.Exists(b.At("single.txt")));
+        Assert.False(Directory.Exists(b.At("folder")));
+        Assert.Equal(["a", "b", "single"], b.Recovered().Order());
+        Assert.Equal("stays", File.ReadAllText(b.At("stays.txt")));
+    }
+
+    [Fact]
     public async Task ConflictBetweenComputersKeepsTheNewerCopy()
     {
         Assert.SkipUnless(Configured, "Set CLOUDREVE_IT_SITE, CLOUDREVE_IT_EMAIL and CLOUDREVE_IT_PASSWORD to run against a real server.");

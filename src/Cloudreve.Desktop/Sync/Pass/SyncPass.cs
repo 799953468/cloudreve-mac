@@ -32,6 +32,8 @@ internal sealed class SyncPass(FolderPairStore store, FolderPair pair, PairOpera
     private readonly HashSet<string> deferred = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> deferredFiles = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<PairNode> directoryTrash = [];
+    // Local folders deleted in the cloud whose contents are exactly what was last synced; emptied after the file pass.
+    private readonly List<string> localTreeRemovals = [];
     private readonly HashSet<string> trashedDirectories = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<FileTransfer> pending = [];
     private readonly HashSet<string> finished = [];
@@ -111,6 +113,12 @@ internal sealed class SyncPass(FolderPairStore store, FolderPair pair, PairOpera
                 remote = await PairInventory.ReadRemoteAsync(pair.Remote, "", Drive, rules, resources.RemoteScan, cancel,
                     activity == null ? null : count => activity.SetScan(ScanPhase.Remote, count, scope != null), scope);
                 string? escalation = scope?.FullInventoryReason(baseline, local, remote, database);
+                if (escalation == "RemoteItemDisappeared" && await ConfirmTrashedAsync(scope!, cancel) is { } confirmed)
+                {
+                    scope = confirmed;
+                    escalation = scope.FullInventoryReason(baseline, local, remote, database);
+                }
+
                 if (escalation == null)
                 {
                     break;
@@ -138,6 +146,48 @@ internal sealed class SyncPass(FolderPairStore store, FolderPair pair, PairOpera
 
         activity?.SetScan(ScanPhase.Idle);
         view = new ReconcileView(baseline, local, remote, rules, conflicts, blocked);
+    }
+
+    // How far back the trash is read for a path scan. A push event arrives seconds after the deletion; an hour also covers
+    // a scan retried later or a local clock that is somewhat off.
+    internal static readonly TimeSpan TrashLookback = TimeSpan.FromHours(1);
+
+    // A cloud item missing from a path scan can be half of a move to a path outside the scope, so it would normally
+    // need a full scan. When the trash holds it with the identity the baseline knew, it was deleted: the returned scope
+    // records that, so the deletion syncs in this pass. Returns null when anything missing stays unexplained.
+    private async Task<PairScanScope?> ConfirmTrashedAsync(PairScanScope current, CancellationToken cancel)
+    {
+        var missing = current.UnexplainedRemoteDisappearances(baseline, local, remote);
+        if (missing.Count == 0)
+        {
+            return null;
+        }
+
+        attempt.Stage = "ConfirmCloudDeletions";
+        long since = ((attempt.ServerTime ?? DateTimeOffset.UtcNow) - TrashLookback).ToUnixTimeSeconds();
+        List<TrashedEntry> trashed;
+        try
+        {
+            trashed = await Drive.TrashedSinceAsync(since, cancel);
+        }
+        catch (Exception ex) when (!cancel.IsCancellationRequested && ex is HttpRequestException or InvalidDataException or KeyNotFoundException or InvalidOperationException
+                                       or System.Text.Json.JsonException)
+        {
+            Serilog.Log.Logger.ForContext("PairId", pair.Marker).WriteFailure(Serilog.Events.LogEventLevel.Warning, "Read cloud trash to confirm deletions", ex);
+            return null;
+        }
+
+        var confirmed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in trashed)
+        {
+            if (CatchUpPlanner.RelativeKey(pair.Remote, item.RestoreUri) is { } key && baseline.TryGetValue(key, out var known) && known.RemoteId == item.Id)
+            {
+                confirmed.Add(key);
+            }
+        }
+
+        // A trashed folder confirms everything that was below it.
+        return missing.All(key => ReconcileView.Within(confirmed, key)) ? current.WithConfirmedRemoteDeletions(confirmed) : null;
     }
 
     // A worker can finish before the coordinator gets to commit the batch baseline.
@@ -179,6 +229,8 @@ internal sealed class SyncPass(FolderPairStore store, FolderPair pair, PairOpera
         // These trees were blocked during the file pass. Trash only after rechecking their contents.
         attempt.Stage = "TrashDirectories";
         await TrashDirectoriesAsync(cancel);
+        attempt.Stage = "RemoveLocalTrees";
+        await RemoveLocalTreesAsync(cancel);
     }
 
     private void Conflict(string key, ConflictCause cause, bool block = true)
@@ -222,8 +274,17 @@ internal sealed class SyncPass(FolderPairStore store, FolderPair pair, PairOpera
                 case DirectoryAction.RemoveLocal:
                     if (!await RemoveLocalDirectoryAsync(key, path, cancel))
                     {
-                        // A non-empty local directory is never removed.
-                        Conflict(key, ConflictCause.DirectoryNotEmpty);
+                        if (UnchangedLocalTree(key))
+                        {
+                            // Its files go to recovery after the file pass; until then nothing below it may change.
+                            blocked.Add(key);
+                            localTreeRemovals.Add(key);
+                        }
+                        else
+                        {
+                            // New, changed, ignored or unsupported contents are never removed.
+                            Conflict(key, ConflictCause.DirectoryNotEmpty);
+                        }
                     }
 
                     continue;
@@ -547,6 +608,113 @@ internal sealed class SyncPass(FolderPairStore store, FolderPair pair, PairOpera
                 downloaded++;
             }
         }, cancel);
+    }
+
+    // Every local item below key is one the baseline knows, unchanged since the last sync, and nothing below it is ignored.
+    private bool UnchangedLocalTree(string key)
+    {
+        string prefix = key + "/";
+        if (local.Excluded.Any(path => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) ||
+            remote.Nodes.Keys.Any(path => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        foreach (var node in local.Nodes.Values.Where(node => node.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+        {
+            if (!baseline.TryGetValue(node.Key, out var known) || known.LocalId == null || known.LocalId != node.LocalId ||
+                node.Kind switch
+                {
+                    NodeKind.Directory => !known.IsDirectory,
+                    NodeKind.File => known.IsDirectory || known.LocalHash != node.Hash,
+                    _ => true
+                })
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // Empties a local folder deleted in the cloud: each file is rechecked and moved to recovery, then folders are removed
+    // deepest first. Anything that changed since the scan defers the rest of the tree to the next pass.
+    private async Task RemoveLocalTreesAsync(CancellationToken cancel)
+    {
+        foreach (string key in localTreeRemovals)
+        {
+            if (ReconcileView.Within(deferred, key))
+            {
+                continue;
+            }
+
+            activity?.Start(UiText.Get("activity.moveToRecovery"), key);
+            await ops.VerifyRemoteRootAsync(cancel);
+            await ops.ResolveRemoteAsync(key, null, false, cancel);
+            if (DeferIfChanged(key))
+            {
+                activity?.Finish(UiText.Get("activity.changedWillRetry"));
+                continue;
+            }
+
+            string prefix = key + "/";
+            var below = local.Nodes.Values.Where(node => node.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToArray();
+            bool complete = true;
+            try
+            {
+                foreach (var file in below.Where(node => node.Kind == NodeKind.File))
+                {
+                    await ops.RequireLocalAsync(file.Key, file.Hash, cancel, file);
+                    ops.MoveToRecovery(file.Key);
+                    baseline.Remove(file.Key);
+                    dirty = true;
+                    removed++;
+                }
+            }
+            catch (LocalFileChangedException)
+            {
+                deferred.Add(key);
+                complete = false;
+            }
+
+            foreach (string directory in below.Where(node => node.Kind == NodeKind.Directory).Select(node => node.Key).Append(key)
+                         .OrderByDescending(path => path.Count(c => c == '/')))
+            {
+                if (!complete)
+                {
+                    break;
+                }
+
+                switch (LocalFile.ChangeDirectoryEntry(Path.Combine(pair.Local, directory), create: false))
+                {
+                    case DirectoryChangeResult.Applied:
+                        dirty |= baseline.Remove(directory);
+                        break;
+                    case DirectoryChangeResult.NotEmpty:
+                        // Something new appeared since the scan; keep it and report the folder.
+                        Conflict(key, ConflictCause.DirectoryNotEmpty, block: false);
+                        complete = false;
+                        break;
+                    default:
+                        deferred.Add(key);
+                        complete = false;
+                        break;
+                }
+            }
+
+            if (complete)
+            {
+                // Entries already gone locally were part of the deleted folder too.
+                foreach (string stale in baseline.Keys.Where(path => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToArray())
+                {
+                    baseline.Remove(stale);
+                }
+
+                removed++;
+            }
+
+            activity?.Finish(UiText.Get(complete ? "activity.done" : "activity.changedWillRetry"));
+        }
     }
 
     private async Task TrashDirectoriesAsync(CancellationToken cancel)

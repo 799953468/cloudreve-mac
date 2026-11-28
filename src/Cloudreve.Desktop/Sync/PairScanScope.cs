@@ -70,10 +70,7 @@ internal sealed class PairScanScope
             }
         }
 
-        // Any other local replacement stays a conflict that blocks its whole subtree in a full scan too,
-        // so walking the pair would only reach the same result. Paths inside it are blocked by this pass instead.
-        var replaced = ancestors.Where(parent => !Covers(parent) && ReplacedLocally(parent, baseline, local))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var replaced = ReplacedAncestors(baseline, local);
         foreach (string parent in ancestors)
         {
             if (Covers(parent) || Within(replaced, parent))
@@ -121,6 +118,31 @@ internal sealed class PairScanScope
 
         // Still checked for replaced trees: a replacement that came from elsewhere in the pair is a move.
         return database.HasOutsideIdentity(baseline, local, remote) ? "IdentityMovedFromOutsideScope" : null;
+    }
+
+    // Any local replacement that is not adopted stays a conflict that blocks its whole subtree in a full scan too,
+    // so walking the pair would only reach the same result. Paths inside it are blocked by this pass instead.
+    private HashSet<string> ReplacedAncestors(Dictionary<string, FileBaseline> baseline, PairInventory local)
+    {
+        return ancestors.Where(parent => !Covers(parent) && ReplacedLocally(parent, baseline, local)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    // Tracked paths this scan no longer finds in the cloud, whose identity is nowhere else in the scan and which are not
+    // yet confirmed deleted. Each one makes FullInventoryReason ask for a full scan unless the trash confirms it.
+    internal List<string> UnexplainedRemoteDisappearances(Dictionary<string, FileBaseline> baseline, PairInventory local, PairInventory remote)
+    {
+        var replaced = ReplacedAncestors(baseline, local);
+        var remoteIds = remote.Nodes.Values.Where(node => node.Remote?.Id != null).Select(node => node.Remote!.Id!).ToHashSet();
+        return baseline.Where(entry => !Within(replaced, entry.Key) && !remote.Nodes.ContainsKey(entry.Key) && entry.Value.RemoteId != null &&
+                                       !remoteIds.Contains(entry.Value.RemoteId) && !ConfirmedRemoteDeletion(entry.Key))
+            .Select(entry => entry.Key).ToList();
+    }
+
+    internal PairScanScope WithConfirmedRemoteDeletions(IEnumerable<string> keys)
+    {
+        var confirmed = new HashSet<string>(ConfirmedRemoteDeletions, StringComparer.OrdinalIgnoreCase);
+        confirmed.UnionWith(keys);
+        return new PairScanScope(targets) { ConfirmedLocalDeletions = ConfirmedLocalDeletions, ConfirmedRemoteDeletions = confirmed };
     }
 
     private bool ConfirmedRemoteDeletion(string key)

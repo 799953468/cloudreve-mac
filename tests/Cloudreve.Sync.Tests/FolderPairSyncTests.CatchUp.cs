@@ -168,6 +168,59 @@ public sealed partial class FolderPairSyncTests
     }
 
     [Fact]
+    public async Task CloudDeletionFromAPushEventSyncsInAPathScan()
+    {
+        site.Put(Root + "/doc", "doc");
+        site.Put(Root + "/keep", "keep");
+        await FullPassAsync();
+        site.TrashFile(Root + "/doc");
+
+        var attempt = new PairScanAttempt { ServerTime = site.Now };
+        site.BeforeList = uri => Assert.Equal(Root, uri);
+        var result = await RunAsync(attempt: attempt, scope: new PairScanScope(["doc"]));
+        Assert.NotNull(attempt.Scope);
+        Assert.Null(attempt.FullReason);
+        Assert.Equal(1, result.Removed);
+        Assert.False(File.Exists(Path.Combine(pair.Local, "doc")));
+        Assert.Single(Directory.GetFiles(Path.Combine(pair.Local, PairInventory.Recovery), "doc", SearchOption.AllDirectories));
+        Assert.Equal("keep", File.ReadAllText(Path.Combine(pair.Local, "keep")));
+    }
+
+    [Fact]
+    public async Task CloudFolderDeletionRemovesItsUnchangedLocalCopy()
+    {
+        site.Folders.UnionWith([Root + "/dir", Root + "/dir/sub"]);
+        site.Ids[Root + "/dir"] = "dir-id";
+        site.Put(Root + "/dir/a", "a");
+        site.Put(Root + "/dir/sub/b", "b");
+        await FullPassAsync();
+        site.TrashFile(Root + "/dir");
+
+        var attempt = new PairScanAttempt { ServerTime = site.Now };
+        var result = await RunAsync(attempt: attempt, scope: new PairScanScope(["dir"]));
+        Assert.NotNull(attempt.Scope);
+        Assert.Empty(result.Conflicts);
+        Assert.False(Directory.Exists(Path.Combine(pair.Local, "dir")));
+        Assert.Equal(["a", "b"], Directory.GetFiles(Path.Combine(pair.Local, PairInventory.Recovery), "*", SearchOption.AllDirectories)
+            .Select(File.ReadAllText).Order());
+        Assert.DoesNotContain(store.ReadBaseline(pair).Keys, key => key.StartsWith("dir", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task PermanentCloudDeletionStillNeedsAFullScan()
+    {
+        site.Put(Root + "/doc", "doc");
+        await FullPassAsync();
+        // Removed without going through the trash, so nothing can tell it apart from a move out of the scope.
+        site.Files.Remove(Root + "/doc");
+
+        var attempt = new PairScanAttempt { ServerTime = site.Now };
+        await RunAsync(attempt: attempt, scope: new PairScanScope(["doc"]));
+        Assert.Null(attempt.Scope);
+        Assert.Equal("Escalated:RemoteItemDisappeared", attempt.FullReason);
+    }
+
+    [Fact]
     public async Task CoordinatorCatchesUpAtStartupAndVerifiesWhenDue()
     {
         site.Put(Root + "/doc", "doc");
