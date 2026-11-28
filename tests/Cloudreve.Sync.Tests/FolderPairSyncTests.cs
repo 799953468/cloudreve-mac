@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.Http.Json;
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -121,12 +122,10 @@ public sealed class FolderPairSyncTests : IDisposable
     }
 
     [Fact]
+    [SupportedOSPlatform("macos")]
     public async Task DownloadUsesOrdinaryLocalFilePermissions()
     {
-        if (!OperatingSystem.IsMacOS())
-        {
-            throw new PlatformNotSupportedException();
-        }
+        Assert.SkipUnless(OperatingSystem.IsMacOS(), "Unix permissions apply on macOS only.");
         string ordinary = Path.Combine(pair.Local, "ordinary");
         File.WriteAllText(ordinary, "one");
         site.Put(Root + "/download", "two");
@@ -584,7 +583,9 @@ public sealed class FolderPairSyncTests : IDisposable
 
         Assert.Empty((await RunAsync()).Conflicts);
         Assert.Empty((await RunAsync()).Conflicts);
-        Assert.Equal(original, store.ReadBaseline(pair)[target]);
+        var moved = store.ReadBaseline(pair)[target];
+        // NTFS bumps ChangeTime on rename, so the Windows content generation legitimately changes with the name.
+        Assert.Equal(original, OperatingSystem.IsWindows() ? moved with { LocalGeneration = original.LocalGeneration } : moved);
         Assert.False(site.Files.ContainsKey(Root + "/old"));
         Assert.False(File.Exists(Path.Combine(pair.Local, "old")));
         Assert.Equal("second", File.ReadAllText(Path.Combine(pair.Local, target)));
@@ -854,6 +855,8 @@ public sealed class FolderPairSyncTests : IDisposable
     public async Task ReusesVerifiedDigestAfterRestartWithoutOpeningTheFile()
     {
         site.Put(Root + "/doc", "original");
+        await RunAsync();
+        // On Windows installing the download renames it, which changes the generation; the next scan checkpoints it.
         await RunAsync();
         string path = Path.Combine(pair.Local, "doc");
         var baseline = store.ReadBaseline(pair)["doc"];

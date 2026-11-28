@@ -248,19 +248,22 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
     internal async Task DownloadAsync(DriveEntry file, string destination, CancellationToken cancel, SyncActivity? activity = null)
     {
         string temp = Path.Combine(Path.GetDirectoryName(destination)!, $".cloudreve-{Guid.NewGuid():N}.part");
-        using (var output = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true))
+        var output = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true);
+        try
         {
-            try
+            using (output)
             {
                 await ReadDownloadAsync(file, output, null, cancel, activity);
-                output.Close();
-                cancel.ThrowIfCancellationRequested();
-                File.Move(temp, destination, true);
             }
-            finally
-            {
-                File.Delete(temp);
-            }
+
+            cancel.ThrowIfCancellationRequested();
+            File.Move(temp, destination, true);
+        }
+        finally
+        {
+            // Windows cannot delete a file that still has an open handle, so close it before cleaning up.
+            output.Dispose();
+            File.Delete(temp);
         }
     }
 
