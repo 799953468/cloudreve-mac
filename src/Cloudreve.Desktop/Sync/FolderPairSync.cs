@@ -135,10 +135,12 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
             bool dirty = false;
             try
             {
+                // A pass that migrates mount IDs cannot trust their volume, so it never adopts a recreated directory.
+                bool migrating = LegacyVolumeIds.Present(baseline);
                 dirty = LegacyVolumeIds.Upgrade(baseline, local, conflicts);
                 blocked.UnionWith(conflicts);
                 attempt.Stage = "SyncDirectories";
-                dirty |= await SyncDirectoriesAsync(local, remote, baseline, rules, conflicts, blocked, deferred, directoryTrash, cancel);
+                dirty |= await SyncDirectoriesAsync(local, remote, baseline, rules, conflicts, blocked, deferred, directoryTrash, !migrating, cancel);
                 attempt.Stage = "ApplyFileMoves";
                 dirty |= await ApplyFileMovesAsync(local, remote, baseline, rules, conflicts, blocked, cancel);
                 attempt.Stage = "ReconcileFiles";

@@ -52,7 +52,19 @@ internal sealed class PairScanScope
     // Returns why this path scan cannot be trusted on its own, or null when it can.
     internal string? FullInventoryReason(Dictionary<string, FileBaseline> baseline, PairInventory local, PairInventory remote, BaselineDatabase database)
     {
-        // A full scan also turns a locally replaced directory into a conflict that blocks its whole subtree,
+        // Only a full scan can show that a directory recreated in place is not one half of a move. Below a replacement
+        // that cannot be adopted, the full scan blocks the subtree too, so escalating there would repeat on every change.
+        var blocked = baseline.Keys.Where(key => ReplacedLocally(key, baseline, local) && !RecreatedCandidate(key, baseline, local, remote))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (string key in baseline.Keys)
+        {
+            if (RecreatedCandidate(key, baseline, local, remote) && !Within(blocked, key))
+            {
+                return "LocalDirectoryRecreated";
+            }
+        }
+
+        // Any other local replacement stays a conflict that blocks its whole subtree in a full scan too,
         // so walking the pair would only reach the same result. Paths inside it are blocked by this pass instead.
         var replaced = ancestors.Where(parent => !Covers(parent) && ReplacedLocally(parent, baseline, local))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -103,6 +115,12 @@ internal sealed class PairScanScope
 
         // Still checked for replaced trees: a replacement that came from elsewhere in the pair is a move.
         return database.HasOutsideIdentity(baseline, local, remote) ? "IdentityMovedFromOutsideScope" : null;
+    }
+
+    private static bool RecreatedCandidate(string key, Dictionary<string, FileBaseline> baseline, PairInventory local, PairInventory remote)
+    {
+        return baseline.TryGetValue(key, out var known) && local.Nodes.TryGetValue(key, out var here) && here.Key == key &&
+               FolderPairSync.MayBeRecreatedInPlace(known, here, remote.Nodes.GetValueOrDefault(key));
     }
 
     // Mirrors the identity check in SyncDirectoriesAsync that marks the directory as a conflict.

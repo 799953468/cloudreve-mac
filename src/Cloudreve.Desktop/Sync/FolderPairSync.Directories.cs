@@ -17,14 +17,36 @@ internal sealed partial class FolderPairSync
         return false;
     }
 
+    // Build tools and package managers delete and recreate their output folders, which gives them new identities.
+    // A directory that reappears at the same path on the same volume, while its cloud folder is unchanged, can be the
+    // same folder. SyncDirectoriesAsync also requires that neither identity belongs to another tracked or scanned item,
+    // which only a full scan can show, so a path scan escalates when this holds.
+    internal static bool MayBeRecreatedInPlace(FileBaseline previous, PairNode here, PairNode? there)
+    {
+        return previous.IsDirectory && previous.LocalId != null && here.Kind == NodeKind.Directory && here.LocalId != null &&
+               here.LocalId != previous.LocalId && Volume(here.LocalId) == Volume(previous.LocalId) &&
+               !string.IsNullOrEmpty(previous.RemoteId) && there?.Kind == NodeKind.Directory && there.Remote?.Id == previous.RemoteId;
+    }
+
+    private static string Volume(string localId)
+    {
+        int end = localId.IndexOf(':');
+        return end < 0 ? localId : localId[..end];
+    }
+
     private async Task<bool> SyncDirectoriesAsync(PairInventory local, PairInventory remote, Dictionary<string, FileBaseline> baseline,
-        PairIgnoreRules rules, HashSet<string> conflicts, HashSet<string> blocked, HashSet<string> deferred, List<PairNode> directoryTrash, CancellationToken cancel)
+        PairIgnoreRules rules, HashSet<string> conflicts, HashSet<string> blocked, HashSet<string> deferred, List<PairNode> directoryTrash, bool adoptRecreated,
+        CancellationToken cancel)
     {
         ProtectMovedTrees(local, remote, baseline, conflicts, blocked);
         var keys = baseline.Where(entry => entry.Value.IsDirectory).Select(entry => entry.Key)
             .Concat(local.Nodes.Values.Concat(remote.Nodes.Values).Where(node => node.Kind == NodeKind.Directory).Select(node => node.Key))
             .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
         bool dirty = false;
+        // Identities seen anywhere in this full scan or tracked by the baseline. A recreated directory must match neither:
+        // the old identity elsewhere means the folder moved, and a tracked new identity means another folder moved here.
+        var scannedIds = local.Nodes.Values.Where(node => node.LocalId != null).Select(node => node.LocalId!).ToHashSet();
+        var trackedIds = baseline.Values.Where(entry => entry.LocalId != null).Select(entry => entry.LocalId!).ToHashSet();
         foreach (string key in keys)
         {
             cancel.ThrowIfCancellationRequested();
@@ -44,7 +66,7 @@ internal sealed partial class FolderPairSync
             remote.Nodes.TryGetValue(key, out var there);
             if (!SafeMovePath(local, key) || !SafeMovePath(remote, key) || previous?.IsDirectory == false ||
                 here != null && here.Kind != NodeKind.Directory || there != null && there.Kind != NodeKind.Directory ||
-                here != null && previous?.LocalId != null && here.LocalId != previous.LocalId ||
+                here != null && previous?.LocalId != null && here.LocalId != previous.LocalId && !RecreatedInPlace(previous, here, there) ||
                 there != null && previous?.RemoteId != null && there.Remote?.Id != previous.RemoteId)
             {
                 conflicts.Add(key);
@@ -171,6 +193,11 @@ internal sealed partial class FolderPairSync
         }
 
         return dirty;
+
+        bool RecreatedInPlace(FileBaseline previous, PairNode here, PairNode? there)
+        {
+            return adoptRecreated && MayBeRecreatedInPlace(previous, here, there) && !scannedIds.Contains(previous.LocalId!) && !trackedIds.Contains(here.LocalId!);
+        }
 
         bool DeferIfChanged(string key, bool operationRaced = false)
         {

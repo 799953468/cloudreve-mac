@@ -288,15 +288,92 @@ public sealed class FolderPairSyncTests : IDisposable
     }
 
     [Fact]
-    public async Task ChangeInsideLocallyReplacedDirectoryStaysAPathScan()
+    public async Task RecreatedBuildDirectoryKeepsSyncingFileByFile()
     {
-        site.Folders.UnionWith([Root + "/build", Root + "/build/out", Root + "/unrelated"]);
-        site.Put(Root + "/build/out/old", "old");
+        site.Folders.UnionWith([Root + "/build", Root + "/build/out"]);
+        site.Put(Root + "/build/out/same", "same");
+        site.Put(Root + "/build/out/stale", "stale");
         await RunAsync();
+        int transfers = site.Transfers;
         // Build tools delete and recreate their output folders, which gives them new identities.
         string build = Path.Combine(pair.Local, "build");
         Directory.Delete(build, true);
         Directory.CreateDirectory(Path.Combine(build, "out"));
+        File.WriteAllText(Path.Combine(build, "out", "same"), "same");
+        File.WriteAllText(Path.Combine(build, "out", "fresh"), "fresh");
+
+        var result = await RunAsync();
+        Assert.Empty(result.Conflicts);
+        Assert.Equal(1, result.Uploaded);
+        Assert.Equal(1, result.Removed);
+        // Only the new file moves: one upload and its readback. The unchanged file is not sent again.
+        Assert.Equal(transfers + 2, site.Transfers);
+        Assert.Equal("fresh", site.Files[Root + "/build/out/fresh"].Text);
+        Assert.Equal("same", site.Files[Root + "/build/out/same"].Text);
+        Assert.Equal([Root + "/build/out/stale"], site.TrashRequests);
+        var baseline = store.ReadBaseline(pair);
+        Assert.Equal(LocalFile.Identity(build), baseline["build"].LocalId);
+        Assert.Equal(LocalFile.Identity(Path.Combine(build, "out")), baseline["build/out"].LocalId);
+        Assert.Empty((await RunAsync()).Conflicts);
+    }
+
+    [Fact]
+    public async Task PathScanEscalatesOnceForARecreatedDirectory()
+    {
+        site.Folders.UnionWith([Root + "/build", Root + "/build/out", Root + "/unrelated"]);
+        site.Put(Root + "/build/out/old", "old");
+        await RunAsync();
+        string build = Path.Combine(pair.Local, "build");
+        Directory.Delete(build, true);
+        Directory.CreateDirectory(Path.Combine(build, "out"));
+        File.WriteAllText(Path.Combine(build, "out", "old"), "old");
+        File.WriteAllText(Path.Combine(build, "out", "new"), "new");
+
+        var attempt = new PairScanAttempt();
+        var result = await RunAsync(attempt: attempt, scope: new PairScanScope(["build/out/new"]));
+        Assert.Null(attempt.Scope);
+        Assert.Equal("Escalated:LocalDirectoryRecreated", attempt.FullReason);
+        Assert.Empty(result.Conflicts);
+        Assert.Equal("new", site.Files[Root + "/build/out/new"].Text);
+        Assert.Empty(site.TrashRequests);
+
+        // The full scan adopted the new folders, so the next change there is an ordinary path scan.
+        File.WriteAllText(Path.Combine(build, "out", "newer"), "newer");
+        site.BeforeList = uri => Assert.NotEqual(Root + "/unrelated", uri);
+        var next = new PairScanAttempt();
+        await RunAsync(attempt: next, scope: new PairScanScope(["build/out/newer"]));
+        Assert.NotNull(next.Scope);
+        Assert.Null(next.FullReason);
+        Assert.Equal("newer", site.Files[Root + "/build/out/newer"].Text);
+    }
+
+    [Fact]
+    public async Task DirectoryMovedAwayIsNotAdoptedByItsReplacement()
+    {
+        site.Folders.Add(Root + "/build");
+        site.Put(Root + "/build/keep", "keep");
+        await RunAsync();
+        string build = Path.Combine(pair.Local, "build");
+        Directory.Move(build, Path.Combine(pair.Local, "archive"));
+        Directory.CreateDirectory(build);
+
+        var result = await RunAsync();
+        Assert.Contains("build", result.Conflicts);
+        Assert.Empty(site.TrashRequests);
+        Assert.Equal("keep", site.Files[Root + "/build/keep"].Text);
+    }
+
+    [Fact]
+    public async Task ChangeInsideReplacedDirectoryThatCannotBeAdoptedStaysAPathScan()
+    {
+        site.Folders.UnionWith([Root + "/build", Root + "/build/out", Root + "/unrelated"]);
+        site.Put(Root + "/build/out/old", "old");
+        await RunAsync();
+        // The cloud folder was replaced too, so neither side can vouch for the other.
+        string build = Path.Combine(pair.Local, "build");
+        Directory.Delete(build, true);
+        Directory.CreateDirectory(Path.Combine(build, "out"));
+        site.Ids[Root + "/build"] = "replacement";
         Assert.Equal("build", Assert.Single((await RunAsync()).Conflicts));
 
         File.WriteAllText(Path.Combine(build, "out", "new"), "new");

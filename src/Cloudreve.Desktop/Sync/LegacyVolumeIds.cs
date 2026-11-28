@@ -6,6 +6,11 @@ internal static class LegacyVolumeIds
 {
     private const int MountIdLength = 16;
 
+    internal static bool Present(Dictionary<string, FileBaseline> baseline)
+    {
+        return baseline.Values.Any(entry => entry.LocalId?.IndexOf(':') == MountIdLength);
+    }
+
     internal static bool Upgrade(Dictionary<string, FileBaseline> baseline, PairInventory local, HashSet<string> conflicts)
     {
         var legacy = baseline.Where(entry => entry.Value.LocalId?.IndexOf(':') == MountIdLength).ToArray();
