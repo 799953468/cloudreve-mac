@@ -4,13 +4,13 @@
   <Window.Styles><StyleInclude Source="/Styles/DesktopControls.axaml" /></Window.Styles>
   <Grid ColumnDefinitions="200,*">
     <Border Background="{DynamicResource SidebarFill}" BorderBrush="{DynamicResource Divider}" BorderThickness="0,0,1,0"><StackPanel>
-      <d:BrandMark Height="24" Margin="16,16,8,16" />
+      <d:BrandMark Height="24" Margin="16,18,8,18" />
       <ListBox x:Name="Navigation" SelectedIndex="0" Background="Transparent" Margin="8,0">
-        <ListBoxItem><StackPanel Orientation="Horizontal" Spacing="16"><PathIcon Data="{StaticResource DriveIcon}" Width="20" /><TextBlock Text="{d:Tr settings.drives}" /></StackPanel></ListBoxItem>
-        <ListBoxItem><StackPanel Orientation="Horizontal" Spacing="16"><PathIcon Data="{StaticResource GearIcon}" Width="20" /><TextBlock Text="{d:Tr settings.general}" /></StackPanel></ListBoxItem>
-        <ListBoxItem><StackPanel Orientation="Horizontal" Spacing="16"><PathIcon Data="{StaticResource InfoIcon}" Width="20" /><TextBlock Text="{d:Tr settings.about}" /></StackPanel></ListBoxItem>
+        <ListBoxItem><StackPanel Orientation="Horizontal" Spacing="12"><PathIcon Data="{StaticResource DriveIcon}" Width="18" Height="18" /><TextBlock Text="{d:Tr settings.drives}" /></StackPanel></ListBoxItem>
+        <ListBoxItem><StackPanel Orientation="Horizontal" Spacing="12"><PathIcon Data="{StaticResource GearIcon}" Width="18" Height="18" /><TextBlock Text="{d:Tr settings.general}" /></StackPanel></ListBoxItem>
+        <ListBoxItem><StackPanel Orientation="Horizontal" Spacing="12"><PathIcon Data="{StaticResource InfoIcon}" Width="18" Height="18" /><TextBlock Text="{d:Tr settings.about}" /></StackPanel></ListBoxItem>
       </ListBox></StackPanel></Border>
-    <ScrollViewer x:Name="Scroll" Grid.Column="1" HorizontalScrollBarVisibility="Disabled"><StackPanel Margin="24,20,24,24" Spacing="16">
+    <ScrollViewer x:Name="Scroll" Grid.Column="1" HorizontalScrollBarVisibility="Disabled"><StackPanel Margin="28,22,28,28" Spacing="16">
       <StackPanel x:Name="DrivePage" Classes="reveal" Spacing="14">
         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
           <TextBlock Classes="pageTitle" Text="{d:Tr settings.drives}" VerticalAlignment="Center" />
@@ -29,7 +29,7 @@
           </StackPanel>
         </StackPanel>
       </StackPanel>
-      <TextBlock x:Name="ErrorMessage" Foreground="{DynamicResource DangerInk}" IsVisible="False" TextWrapping="Wrap" />
+      <TextBlock x:Name="ErrorMessage" Foreground="{DynamicResource DangerInk}" IsVisible="False" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
     </StackPanel></ScrollViewer>
   </Grid>
 </Window>

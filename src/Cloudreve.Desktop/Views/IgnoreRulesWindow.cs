@@ -9,6 +9,7 @@ internal sealed partial class IgnoreRulesWindow : Window
     internal IgnoreRulesWindow(string driveName, string rules, Action<string> saveRules)
     {
         InitializeComponent();
+        Motion.EnableTransitions(this);
         DriveName.Text = driveName;
         RulesEditor.Text = rules;
         Opened += (_, _) => { RulesEditor.Focus(); };

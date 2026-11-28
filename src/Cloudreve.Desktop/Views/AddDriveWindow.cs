@@ -26,6 +26,7 @@ internal sealed partial class AddDriveWindow : Window
     private Uri? callback;
     private DriveSession? verified;
     private Step step;
+    private Step? renderedStep;
     private bool busy;
     private bool invalidFolder;
     internal MountedDrive? Existing { get; }
@@ -39,6 +40,7 @@ internal sealed partial class AddDriveWindow : Window
         Existing = existing;
         Reauthorizing = existing?.Pair != null;
         InitializeComponent();
+        Motion.EnableTransitions(this);
         Endpoint.PlaceholderText = UiText.Get("addDrive.siteUrl") + " *";
         this.openBrowser = openBrowser ?? (uri =>
         {
@@ -229,6 +231,7 @@ internal sealed partial class AddDriveWindow : Window
     {
         ErrorText.Text = text;
         ErrorPanel.IsVisible = true;
+        Motion.Enter(ErrorPanel, offsetY: 10, durationMs: 200);
     }
 
     private void Render()
@@ -243,6 +246,7 @@ internal sealed partial class AddDriveWindow : Window
                                     (step switch { Step.Waiting => "waitingDescription", Step.Setup => Reauthorizing ? "reauthorizeDescription" : "finalSetupDescription", _ => "description" }));
         Logo.IsVisible = step is not (Step.Installing or Step.Success);
         Form.IsVisible = step != Step.Installing;
+        Working.IsVisible = step == Step.Installing;
         Endpoint.IsVisible = step == Step.Address;
         Endpoint.IsReadOnly = busy || Existing != null;
         MountFields.IsVisible = step == Step.Setup && !Reauthorizing;
@@ -255,5 +259,11 @@ internal sealed partial class AddDriveWindow : Window
         Back.IsVisible = step is Step.Setup or Step.Waiting || step == Step.Success && !Reauthorizing;
         Back.IsEnabled = !busy;
         Back.Content = UiText.Get(step == Step.Success ? "addDrive.close" : "addDrive.back");
+        if (renderedStep != null && renderedStep != step)
+        {
+            Motion.Enter(Body, offsetY: 10, durationMs: 260);
+        }
+
+        renderedStep = step;
     }
 }

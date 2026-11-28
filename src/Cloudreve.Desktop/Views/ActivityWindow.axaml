@@ -17,11 +17,24 @@
     <Style Selector="PathIcon.queueCompare">
       <Setter Property="Data" Value="M3 7h13l-3-3 1.5-1.5L20 8l-5.5 5.5L13 12l3-3H3z M21 17H8l3 3-1.5 1.5L4 16l5.5-5.5L11 12l-3 3h13z" />
     </Style>
+    <Style Selector="PathIcon.spinning">
+      <Style.Animations>
+        <Animation Duration="0:0:1.6" IterationCount="INFINITE">
+          <KeyFrame Cue="0%"><Setter Property="RotateTransform.Angle" Value="0" /></KeyFrame>
+          <KeyFrame Cue="100%"><Setter Property="RotateTransform.Angle" Value="-360" /></KeyFrame>
+        </Animation>
+      </Style.Animations>
+    </Style>
+    <Style Selector="Window.motion PathIcon#StatusIcon">
+      <Setter Property="Transitions">
+        <Transitions><BrushTransition Property="Foreground" Duration="0:0:0.2" /></Transitions>
+      </Setter>
+    </Style>
     <Style Selector="TextBlock.scanFailure">
       <Setter Property="Foreground" Value="{DynamicResource DangerInk}" />
     </Style>
   </Window.Styles>
-  <Border BorderBrush="{DynamicResource PopupOutline}" BorderThickness="1">
+  <Border x:Name="Root" BorderBrush="{DynamicResource PopupOutline}" BorderThickness="1" RenderTransformOrigin="50%,0%">
     <Grid RowDefinitions="Auto,*,Auto">
       <Border Background="{DynamicResource HeaderFill}" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource Divider}" Padding="16,12,16,8">
         <StackPanel Spacing="12"><Grid ColumnDefinitions="*,Auto"><d:BrandMark Height="28" /><Button x:Name="SettingsButton" Grid.Column="1" Classes="tool icon" Width="30" Height="30" ToolTip.Tip="{d:Tr settings.title}" AutomationProperties.Name="{d:Tr settings.title}"><PathIcon Width="18" Height="18" Data="{StaticResource GearIcon}" /></Button></Grid>
@@ -30,7 +43,7 @@
       </Border>
       <Grid Grid.Row="1"><ScrollViewer x:Name="TaskScroll" HorizontalScrollBarVisibility="Disabled">
         <StackPanel x:Name="Tasks">
-          <StackPanel x:Name="ScanSection">
+          <StackPanel x:Name="ScanSection" Classes="reveal">
             <Grid ColumnDefinitions="*,56" Margin="16,8,16,0">
               <TextBlock Classes="activitySection" Margin="0" Text="{d:Tr popup.scanStatus}" />
               <ProgressBar x:Name="ScanProgress" Grid.Column="1" Classes="syncProgress" MinWidth="0" Width="56" Height="3" ClipToBounds="True" VerticalAlignment="Center" IsIndeterminate="True" />
@@ -50,18 +63,18 @@
               </ItemsControl.ItemTemplate>
             </ItemsControl>
           </StackPanel>
-          <StackPanel x:Name="ActiveSection">
+          <StackPanel x:Name="ActiveSection" Classes="reveal">
             <TextBlock Classes="activitySection" Text="{d:Tr popup.syncing}" />
             <StackPanel x:Name="ActiveRows" />
           </StackPanel>
-          <StackPanel x:Name="WaitingSection">
+          <StackPanel x:Name="WaitingSection" Classes="reveal">
             <TextBlock x:Name="WaitingTitle" Classes="activitySection" />
             <ItemsControl x:Name="WaitingItems">
               <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="d:WaitingRow" x:CompileBindings="True">
                   <Grid ColumnDefinitions="32,*,Auto" ColumnSpacing="8" Margin="16,5"
                         ToolTip.Tip="{Binding Description}" AutomationProperties.Name="{Binding Description}">
-                    <Border Width="28" Height="28" CornerRadius="6" Background="{DynamicResource OptionSelectedFill}" VerticalAlignment="Center">
+                    <Border Width="28" Height="28" CornerRadius="8" Background="{DynamicResource OptionSelectedFill}" VerticalAlignment="Center">
                       <PathIcon Classes.queueUpload="{Binding IsUpload}" Classes.queueDownload="{Binding IsDownload}"
                                 Classes.queueCompare="{Binding IsComparison}" Width="15" Height="15" Foreground="{DynamicResource Primary}" />
                     </Border>
@@ -76,23 +89,23 @@
             </ItemsControl>
             <TextBlock x:Name="WaitingMore" Classes="secondary" FontSize="12" Margin="56,2,16,5" />
           </StackPanel>
-          <StackPanel x:Name="RecentSection">
+          <StackPanel x:Name="RecentSection" Classes="reveal">
             <TextBlock Classes="activitySection" Text="{d:Tr popup.recent}" />
             <StackPanel x:Name="RecentRows" />
           </StackPanel>
         </StackPanel>
         </ScrollViewer>
-        <StackPanel x:Name="Empty" Classes="reveal" VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="12">
-          <Border Width="60" Height="60" CornerRadius="30" Background="{DynamicResource OptionSelectedFill}">
+        <StackPanel x:Name="Empty" Classes="reveal" VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="14">
+          <Border Width="64" Height="64" CornerRadius="32" Background="{DynamicResource OptionSelectedFill}">
             <PathIcon Width="28" Height="28" Data="{StaticResource FolderOutline}" Foreground="{DynamicResource Primary}" />
           </Border>
           <TextBlock Classes="secondary" Text="{d:Tr popup.noActivity}" TextAlignment="Center" />
         </StackPanel>
       </Grid>
-      <Border Grid.Row="2" Background="{DynamicResource HeaderFill}" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource Divider}" Padding="16,9">
+      <Border Grid.Row="2" Background="{DynamicResource HeaderFill}" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource Divider}" Padding="16,10">
         <StackPanel Orientation="Horizontal" Spacing="8">
           <PathIcon x:Name="StatusIcon" Classes="activityInk" Width="16" Height="16" />
-          <TextBlock x:Name="Footer" FontSize="13" />
+          <TextBlock x:Name="Footer" FontSize="13" VerticalAlignment="Center" />
         </StackPanel>
       </Border>
     </Grid>

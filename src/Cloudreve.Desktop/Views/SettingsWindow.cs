@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
+using Avalonia.Markup.Xaml.Styling;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Serilog;
@@ -22,6 +23,7 @@ internal sealed partial class SettingsWindow : Window
         this.host = host;
         this.loginItem = loginItem ?? (OperatingSystem.IsWindows() ? new WindowsLoginItem() : new MacLoginItem());
         InitializeComponent();
+        Motion.EnableTransitions(this);
         AddButton.Content = "+  " + UiText.Get("popup.newDrive");
         AddButton.Click += (_, _) => { host.OpenAdd(); };
         Navigation.SelectionChanged += (_, _) =>
@@ -112,6 +114,7 @@ internal sealed partial class SettingsWindow : Window
         }
 
         shown = next;
+        bool firstRender = !rendered;
         rendered = true;
         Cards.Children.Clear();
         if (shown.Length == 0)
@@ -163,7 +166,7 @@ internal sealed partial class SettingsWindow : Window
                 Grid.SetColumn(label, 1);
                 usage.Children.Add(label);
                 details.Children.Add(usage);
-                details.Children.Add(new ProgressBar { Classes = { "syncProgress" }, Height = 6, Maximum = 100, Value = pct });
+                details.Children.Add(new ProgressBar { Classes = { "syncProgress" }, Height = 6, MinHeight = 6, CornerRadius = new CornerRadius(3), Maximum = 100, Value = pct });
             }
 
             content.Children.Add(new Separator { Classes = { "cardDivider" } });
@@ -202,7 +205,12 @@ internal sealed partial class SettingsWindow : Window
             Grid.SetColumn(delete, 1);
             footer.Children.Add(delete);
             content.Children.Add(footer);
-            Cards.Children.Add(new Border { Classes = { "card" }, Child = content });
+            var card = new Border { Classes = { "card" }, Child = content };
+            Cards.Children.Add(card);
+            if (firstRender)
+            {
+                Motion.Enter(card, offsetY: 8, delayMs: 50 * (Cards.Children.Count - 1));
+            }
         }
     }
 
@@ -251,14 +259,41 @@ internal sealed partial class SettingsWindow : Window
 
     private async Task<bool> ConfirmDeleteAsync(string message)
     {
-        var body = new StackPanel { Margin = new Thickness(20), Spacing = 12 };
+        var body = new StackPanel { Spacing = 0 };
         var dialog = new Window
-            { Title = UiText.Get("settings.deleteDrive"), Width = 440, SizeToContent = SizeToContent.Height, CanResize = false, WindowStartupLocation = WindowStartupLocation.CenterOwner, Content = body };
-        body.Children.Add(new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap });
+        {
+            Title = UiText.Get("settings.deleteDrive"), Width = 420, SizeToContent = SizeToContent.Height, CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner, Content = body
+        };
+        dialog.Styles.Add(new StyleInclude(new Uri("avares://CloudreveClient/Views/")) { Source = new Uri("avares://CloudreveClient/Styles/DesktopControls.axaml") });
+        Motion.EnableTransitions(dialog);
+        dialog[!BackgroundProperty] = dialog.GetResourceObservable("Paper").ToBinding();
+        dialog[!ForegroundProperty] = dialog.GetResourceObservable("Ink").ToBinding();
+        var header = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = 14, Margin = new Thickness(24, 22, 24, 20) };
+        var badge = new Border { Width = 36, Height = 36, CornerRadius = new CornerRadius(18), VerticalAlignment = VerticalAlignment.Top };
+        badge[!Border.BackgroundProperty] = badge.GetResourceObservable("DangerFill").ToBinding();
+        if (this.TryFindResource("TrashIcon", out var trash) && trash is Geometry trashIcon)
+        {
+            var icon = new PathIcon { Data = trashIcon, Width = 16, Height = 16 };
+            icon[!PathIcon.ForegroundProperty] = icon.GetResourceObservable("DangerInk").ToBinding();
+            badge.Child = icon;
+        }
+
+        header.Children.Add(badge);
+        var text = new StackPanel { Spacing = 6 };
+        text.Children.Add(new TextBlock { Text = dialog.Title, FontSize = 16, FontWeight = FontWeight.SemiBold });
+        text.Children.Add(new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap, Classes = { "secondary" } });
+        Grid.SetColumn(text, 1);
+        header.Children.Add(text);
+        body.Children.Add(header);
+        var footer = new Border { Padding = new Thickness(24, 12), BorderThickness = new Thickness(0, 1, 0, 0) };
+        footer[!Border.BackgroundProperty] = footer.GetResourceObservable("SidebarFill").ToBinding();
+        footer[!Border.BorderBrushProperty] = footer.GetResourceObservable("Divider").ToBinding();
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right };
-        body.Children.Add(buttons);
-        var cancel = new Button { Content = UiText.Get("settings.cancel"), IsCancel = true };
-        var ok = new Button { Content = dialog.Title };
+        footer.Child = buttons;
+        body.Children.Add(footer);
+        var cancel = new Button { Content = UiText.Get("settings.cancel"), IsCancel = true, Classes = { "tool", "subtle" }, MinWidth = 76, MinHeight = 34 };
+        var ok = new Button { Content = dialog.Title, Classes = { "tool", "danger" }, MinWidth = 76, MinHeight = 34 };
         cancel.Click += (_, _) => { dialog.Close(false); };
         ok.Click += (_, _) => { dialog.Close(true); };
         buttons.Children.Add(cancel);
@@ -296,7 +331,7 @@ internal sealed partial class SettingsWindow : Window
 
     private StackPanel Group(string key)
     {
-        GeneralPage.Children.Add(new TextBlock { Text = UiText.Get("settings." + key), FontWeight = FontWeight.Medium });
+        GeneralPage.Children.Add(new TextBlock { Text = UiText.Get("settings." + key), Classes = { "secondary" }, FontSize = 13, FontWeight = FontWeight.SemiBold, Margin = new Thickness(4, 6, 0, -4) });
         var group = new StackPanel();
         GeneralPage.Children.Add(new Border { Classes = { "card" }, Padding = new Thickness(0), Child = group });
         return group;
@@ -304,8 +339,8 @@ internal sealed partial class SettingsWindow : Window
 
     private static TextBlock SettingRow(StackPanel group, string key, Control input, string? detail = null)
     {
-        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 12, Margin = new Thickness(16, 10) };
-        var text = new StackPanel();
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 12, Margin = new Thickness(16, 12) };
+        var text = new StackPanel { Spacing = 2 };
         text.Children.Add(new TextBlock { Text = UiText.Get("settings." + key) });
         var description = new TextBlock { Classes = { "secondary" }, Text = detail ?? UiText.Get("settings." + key + "Description"), FontSize = 12, TextWrapping = TextWrapping.Wrap };
         text.Children.Add(description);

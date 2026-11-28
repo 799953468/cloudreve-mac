@@ -103,6 +103,7 @@ internal sealed partial class ActivityWindow : Window
     {
         this.host = host;
         InitializeComponent();
+        Motion.EnableTransitions(this);
         SettingsButton.Click += (_, _) => { host.OpenSettings(); };
         host.Changed += RebuildFilters;
         timer.Tick += (_, _) => { Refresh(); };
@@ -114,6 +115,7 @@ internal sealed partial class ActivityWindow : Window
                 {
                     timer.Start();
                     Refresh(true);
+                    Motion.Pop(Root);
                 }
                 else
                 {
@@ -163,12 +165,25 @@ internal sealed partial class ActivityWindow : Window
 
     private void AddFilter(MountedDrive? drive, string label)
     {
-        var button = new Button { Content = label, Classes = { "chip" } };
+        var button = new Button { Content = label, Classes = { "chip" }, Tag = drive };
         button.Classes.Set("selected", selected == drive);
         button.Click += (_, _) =>
         {
+            if (selected == drive)
+            {
+                return;
+            }
+
+            // Update the chips in place so their colors can transition instead of being rebuilt.
             selected = drive;
-            RebuildFilters();
+            foreach (var chip in Chips.Children.OfType<Button>().Where(c => c.Classes.Contains("chip") && !c.Classes.Contains("add")))
+            {
+                chip.Classes.Set("selected", chip.Tag == drive);
+            }
+
+            snapshots.Clear();
+            Refresh(true);
+            TaskScroll.Offset = default;
         };
         Chips.Children.Add(button);
     }
@@ -214,7 +229,7 @@ internal sealed partial class ActivityWindow : Window
         }
 
         ActiveSection.IsVisible = active.Length > 0;
-        UpdateRows(ActiveRows, active.Select(item => (item.Drive, item.File.Entry, item.File.Transfer)), active: true);
+        UpdateRows(ActiveRows, active.Select(item => (item.Drive, item.File.Entry, item.File.Transfer)), active: true, animate: !force);
 
         WaitingSection.IsVisible = waitingCount > 0;
         WaitingTitle.Text = waitingLabel;
@@ -231,7 +246,7 @@ internal sealed partial class ActivityWindow : Window
         WaitingMore.Text = remaining > 0 ? UiText.Get("popup.queuedMore", ("count", remaining)) : null;
 
         RecentSection.IsVisible = recent.Length > 0;
-        UpdateRows(RecentRows, recent.Select(item => (item.Drive, item.Entry, (ActivityTransfer?)null)), active: false);
+        UpdateRows(RecentRows, recent.Select(item => (item.Drive, item.Entry, (ActivityTransfer?)null)), active: false, animate: !force);
 
         bool showFailure = active.Length == 0 && !scanning && scans.Length > 0;
         Footer.Text = active.Length switch
@@ -246,9 +261,10 @@ internal sealed partial class ActivityWindow : Window
             idle ? "M12 2a10 10 0 1 0 0 20a10 10 0 1 0 0-20 M10 17l-5-5 1.5-1.5 3.5 3.5 7-7 1.5 1.5z" : "M4 5v5h5L7 8a6 6 0 1 1-1 7H3a9 9 0 1 0 2-9z");
         StatusIcon.Classes.Set("failure", showFailure);
         StatusIcon.Classes.Set("healthy", idle);
+        StatusIcon.Classes.Set("spinning", active.Length > 0 || scanning);
     }
 
-    private void UpdateRows(StackPanel panel, IEnumerable<(MountedDrive Drive, ActivityEntry Entry, ActivityTransfer? Transfer)> items, bool active)
+    private void UpdateRows(StackPanel panel, IEnumerable<(MountedDrive Drive, ActivityEntry Entry, ActivityTransfer? Transfer)> items, bool active, bool animate)
     {
         int index = 0;
         foreach (var (drive, entry, transfer) in items)
@@ -268,6 +284,10 @@ internal sealed partial class ActivityWindow : Window
             {
                 row = Row(drive, entry, active);
                 panel.Children.Insert(index, row);
+                if (animate)
+                {
+                    Motion.Enter(row, offsetY: -6);
+                }
             }
             else
             {

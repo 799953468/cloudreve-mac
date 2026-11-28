@@ -3,11 +3,12 @@
         CanResize="False" WindowStartupLocation="CenterScreen" Background="{DynamicResource HeaderFill}" Foreground="{DynamicResource Ink}">
   <Window.Styles><StyleInclude Source="/Styles/DesktopControls.axaml" /></Window.Styles>
   <Grid RowDefinitions="*,Auto">
-    <ScrollViewer HorizontalScrollBarVisibility="Disabled"><StackPanel Margin="48,24" VerticalAlignment="Center" Spacing="8">
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled"><StackPanel x:Name="Body" Margin="48,24" VerticalAlignment="Center" Spacing="8">
       <Image x:Name="Logo" Source="/Assets/cloudreve.png" Width="88" Height="88" Margin="0,0,0,16" />
       <TextBlock x:Name="Heading" Classes="pageTitle" TextAlignment="Center" TextWrapping="Wrap" />
-      <TextBlock x:Name="Hint" Classes="secondary" TextAlignment="Center" TextWrapping="Wrap" />
-      <StackPanel x:Name="Form" Spacing="16" Margin="0,12,0,0">
+      <TextBlock x:Name="Hint" Classes="secondary" TextAlignment="Center" TextWrapping="Wrap" LineHeight="20" />
+      <ProgressBar x:Name="Working" Classes="syncProgress" IsIndeterminate="True" IsVisible="False" Width="160" Height="4" MinHeight="4" Margin="0,16,0,0" HorizontalAlignment="Center" />
+      <StackPanel x:Name="Form" Spacing="12" Margin="0,16,0,0">
         <TextBox x:Name="Endpoint" Classes="filled" Height="56" VerticalContentAlignment="Center" AutomationProperties.Name="{d:Tr addDrive.siteUrl}" />
         <StackPanel x:Name="MountFields" Classes="reveal" Spacing="8" IsVisible="False">
           <Label Content="{d:Tr addDrive.localDriveName}" Target="{Binding #MountName}" Padding="0" />
@@ -19,7 +20,7 @@
         <Button x:Name="Back" Classes="tool" HorizontalAlignment="Stretch" Height="42" />
       </StackPanel>
     </StackPanel></ScrollViewer>
-    <Border Grid.Row="1" x:Name="ErrorPanel" IsVisible="False" Background="{DynamicResource DangerFill}" Padding="16,10">
+    <Border Grid.Row="1" x:Name="ErrorPanel" IsVisible="False" Background="{DynamicResource DangerFill}" BorderBrush="{DynamicResource DangerInk}" BorderThickness="0,1,0,0" Padding="16,10">
       <TextBlock x:Name="ErrorText" TextWrapping="Wrap" Foreground="{DynamicResource DangerInk}" AutomationProperties.LiveSetting="Polite" />
     </Border>
   </Grid>
