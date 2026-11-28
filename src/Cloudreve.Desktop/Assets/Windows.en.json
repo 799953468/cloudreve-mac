@@ -75,6 +75,7 @@
     "autoStart": "Launch at startup",
     "autoStartDescription": "Automatically start when you log in to your computer",
     "autoStartApproval": "Approval required. Turn on the switch to allow Cloudreve in System Settings > Login Items.",
+    "autoStartApprovalWindows": "Startup is turned off in Windows. Turn on the switch to allow Cloudreve in Settings > Apps > Startup.",
     "fastPopupLaunch": "Fast popup launch",
     "fastPopupLaunchDescription": "Keep the popup window in memory for faster opening",
     "languageSettings": "Language",

@@ -24,8 +24,8 @@ internal sealed class DriveProfiles(SessionFileStore primary)
         FolderPairStore.CheckDirectory(profiles);
         foreach (string path in Directory.EnumerateDirectories(profiles).Order(StringComparer.Ordinal))
         {
-            if (Guid.TryParseExact(Path.GetFileName(path), "N", out _) && MacFile.Inspect(path) == NodeKind.Directory &&
-                MacFile.Inspect(Path.Combine(path, "drives.json")) == NodeKind.File)
+            if (Guid.TryParseExact(Path.GetFileName(path), "N", out _) && LocalFile.Inspect(path) == NodeKind.Directory &&
+                LocalFile.Inspect(Path.Combine(path, "drives.json")) == NodeKind.File)
             {
                 yield return new SessionFileStore(path);
             }
@@ -34,7 +34,7 @@ internal sealed class DriveProfiles(SessionFileStore primary)
 
     internal void Reserve(SessionFileStore owner, string local)
     {
-        string path = MacFile.NormalizeSystemPath(local);
+        string path = LocalFile.NormalizeSystemPath(local);
         lock (reservations)
         {
             if (Overlaps(path, Primary.DirectoryPath) || reservations.Any(item => item.Key != owner && Overlaps(item.Value, path)))
@@ -59,7 +59,13 @@ internal sealed class DriveProfiles(SessionFileStore primary)
         left = Path.TrimEndingDirectorySeparator(left).Normalize();
         right = Path.TrimEndingDirectorySeparator(right).Normalize();
         return left.Equals(right, StringComparison.OrdinalIgnoreCase) ||
-               left.StartsWith(right.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase) ||
-               right.StartsWith(left.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase);
+               left.StartsWith(AsDirectory(right), StringComparison.OrdinalIgnoreCase) ||
+               right.StartsWith(AsDirectory(left), StringComparison.OrdinalIgnoreCase);
+    }
+
+    // "C:" and "/" already end in a separator; other directory paths get one so "/a" does not match "/ab".
+    internal static string AsDirectory(string path)
+    {
+        return Path.EndsInDirectorySeparator(path) ? path : path + Path.DirectorySeparatorChar;
     }
 }

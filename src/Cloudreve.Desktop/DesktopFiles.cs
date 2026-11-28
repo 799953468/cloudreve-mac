@@ -6,9 +6,25 @@ namespace Cloudreve.Desktop;
 
 internal static class DesktopFiles
 {
+    // Windows: %LOCALAPPDATA%\CloudreveClient (tokens and caches must not roam). macOS: ~/Library/Application Support/Cloudreve.
+    internal static string DataDirectory
+    {
+        get
+        {
+            return OperatingSystem.IsWindows()
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CloudreveClient")
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Application Support", "Cloudreve");
+        }
+    }
+
     internal static string LogDirectory
     {
-        get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Logs", "Cloudreve"); }
+        get
+        {
+            return OperatingSystem.IsWindows()
+                ? Path.Combine(DataDirectory, "Logs")
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Logs", "Cloudreve");
+        }
     }
 
     internal static async Task OpenFolderAsync(Window window, string path)
@@ -24,7 +40,12 @@ internal static class DesktopFiles
 
     internal static void Reveal(string path)
     {
-        using (Process.Start(new ProcessStartInfo("/usr/bin/open") { ArgumentList = { "-R", path }, UseShellExecute = false }))
+        var start = OperatingSystem.IsWindows()
+            // Explorer parses "/select," itself, so the path cannot go through ArgumentList quoting. Windows paths never contain quotes.
+            ? new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe"), $"/select,\"{Path.GetFullPath(path)}\"")
+            : new ProcessStartInfo("/usr/bin/open") { ArgumentList = { "-R", path } };
+        start.UseShellExecute = false;
+        using (Process.Start(start))
         {
         }
     }

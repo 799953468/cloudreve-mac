@@ -65,8 +65,8 @@ internal sealed partial class FolderPairSync
                 continue;
             }
 
-            string parent = Path.GetDirectoryName(target) ?? "";
-            bool rename = Path.GetDirectoryName(oldKey) == Path.GetDirectoryName(target);
+            string parent = PairKey.Parent(target) ?? "";
+            bool rename = PairKey.Parent(oldKey) == PairKey.Parent(target);
             if (!remoteMoved && !rename && Path.GetFileName(oldKey) != Path.GetFileName(target))
             {
                 // Cloudreve has separate move and rename requests, not an atomic combined operation.
@@ -77,7 +77,7 @@ internal sealed partial class FolderPairSync
             await VerifyRemoteRootAsync(cancel);
             await ResolveRemoteAsync(there.Key, there.Remote, false, cancel);
             await RequireLocalAsync(here.Key, here.Hash, cancel);
-            if (MacFile.Identity(Path.Combine(pair.Local, here.Key)) != previous.LocalId)
+            if (LocalFile.Identity(Path.Combine(pair.Local, here.Key)) != previous.LocalId)
             {
                 throw new IOException(UiText.Get("移动期间本地文件已被替换。"));
             }
@@ -123,7 +123,7 @@ internal sealed partial class FolderPairSync
                 EnsureLocalDirectory(parent);
                 await RequireLocalAsync(target, null, cancel);
                 await RequireLocalAsync(oldKey, here.Hash, cancel);
-                if (MacFile.Identity(Path.Combine(pair.Local, oldKey)) != previous.LocalId)
+                if (LocalFile.Identity(Path.Combine(pair.Local, oldKey)) != previous.LocalId)
                 {
                     throw new IOException(UiText.Get("移动期间本地文件已被替换。"));
                 }
@@ -159,7 +159,7 @@ internal sealed partial class FolderPairSync
 
     private static bool SafeMovePath(PairInventory inventory, string key)
     {
-        for (string? path = key; !string.IsNullOrEmpty(path); path = Path.GetDirectoryName(path))
+        for (string? path = key; !string.IsNullOrEmpty(path); path = PairKey.Parent(path))
         {
             if (inventory.Excluded.Contains(path) || inventory.Nodes.TryGetValue(path, out var entry) &&
                 (entry.Key != path || entry.Kind == NodeKind.Unsupported || path != key && entry.Kind != NodeKind.Directory))

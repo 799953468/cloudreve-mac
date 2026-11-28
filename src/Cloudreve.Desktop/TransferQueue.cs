@@ -46,7 +46,7 @@ internal sealed class TransferQueue(string directory)
     private Dictionary<string, QueuedFile> byKey = [];
     private Dictionary<Guid, QueuedFile> byId = [];
     private readonly HashSet<string> queuedPaths = new(StringComparer.OrdinalIgnoreCase);
-    private MacFile.ContentVersion? manifestVersion;
+    private LocalFile.ContentVersion? manifestVersion;
     private bool needsCleanup = true;
 
     internal IReadOnlyList<QueuedFile> Entries { get { return entries; } }
@@ -55,7 +55,7 @@ internal sealed class TransferQueue(string directory)
     internal static TransferQueue Open(string directory, TransferQueue? cached = null)
     {
         string path = Path.Combine(directory, Manifest);
-        var version = MacFile.GetContentVersion(path);
+        var version = LocalFile.GetContentVersion(path);
         if (version.HasValue && cached != null && cached.manifestVersion == version && cached.DirectoryPath == directory)
         {
             return cached;
@@ -143,7 +143,7 @@ internal sealed class TransferQueue(string directory)
 
     internal static T? ReadCache<T>(string path, JsonTypeInfo<T> typeInfo) where T : class
     {
-        var kind = MacFile.Inspect(path);
+        var kind = LocalFile.Inspect(path);
         if (kind == null)
         {
             return null;
@@ -246,7 +246,7 @@ internal sealed class TransferQueue(string directory)
             }
 
             SetEntries(next);
-            manifestVersion = MacFile.GetContentVersion(Path.Combine(directory, Manifest));
+            manifestVersion = LocalFile.GetContentVersion(Path.Combine(directory, Manifest));
         }
     }
 
@@ -258,7 +258,7 @@ internal sealed class TransferQueue(string directory)
         queuedPaths.Clear();
         foreach (var entry in entries)
         {
-            for (string? path = entry.File.Key; !string.IsNullOrEmpty(path); path = Path.GetDirectoryName(path))
+            for (string? path = entry.File.Key; !string.IsNullOrEmpty(path); path = PairKey.Parent(path))
             {
                 if (!queuedPaths.Add(path))
                 {
@@ -333,7 +333,7 @@ internal sealed class TransferFiles(string prefix)
             state = new UploadCheckpoint(root.Clone(), 0, []);
         }
 
-        var kind = MacFile.Inspect(ReceiptsPath);
+        var kind = LocalFile.Inspect(ReceiptsPath);
         if (kind == null)
         {
             return state;

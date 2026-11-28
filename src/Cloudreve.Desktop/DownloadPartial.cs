@@ -17,7 +17,7 @@ internal sealed class DownloadPartial : IDisposable
     internal DownloadPartial(TransferFiles files)
     {
         this.files = files;
-        if (MacFile.Inspect(files.PartPath) is not (null or NodeKind.File))
+        if (LocalFile.Inspect(files.PartPath) is not (null or NodeKind.File))
         {
             throw new IOException(UiText.Get("传输缓存不是普通文件。"));
         }

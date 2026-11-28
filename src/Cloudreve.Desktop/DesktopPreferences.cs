@@ -30,7 +30,7 @@ internal sealed class DesktopPreferences(string directory)
             }
 
             FolderPairStore.CheckDirectory(directory);
-            if (MacFile.Inspect(path) != NodeKind.File)
+            if (LocalFile.Inspect(path) != NodeKind.File)
             {
                 throw new IOException(UiText.Get("设置必须是普通文件。"));
             }

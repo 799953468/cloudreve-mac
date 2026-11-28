@@ -31,6 +31,7 @@ public sealed class SessionFileStoreTests : IDisposable
     [SupportedOSPlatform("macos")]
     public void SavedSessionSurvivesReopenWithPrivatePermissions()
     {
+        Assert.SkipUnless(OperatingSystem.IsMacOS(), "Unix permissions apply on macOS only.");
         const UnixFileMode ownerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite;
         Directory.CreateDirectory(store.DirectoryPath);
         File.SetUnixFileMode(store.DirectoryPath, ownerOnly | UnixFileMode.UserExecute | UnixFileMode.OtherExecute);

@@ -11,7 +11,7 @@ body:
   - type: input
     id: client-version
     attributes:
-      label: Cloudreve Mac version / 客户端版本
+      label: Cloudreve Client version / 客户端版本
       description: See Settings → About, or give the commit if built from source. / 见「设置 → 关于」；从源码构建可填写提交号。
     validations:
       required: true

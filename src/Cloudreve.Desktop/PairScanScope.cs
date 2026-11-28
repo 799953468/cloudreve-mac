@@ -14,7 +14,7 @@ internal sealed class PairScanScope
         {
             PairInventory.ValidateKey(key);
             targets.Add(key);
-            for (string? parent = Path.GetDirectoryName(key); !string.IsNullOrEmpty(parent); parent = Path.GetDirectoryName(parent))
+            for (string? parent = PairKey.Parent(key); !string.IsNullOrEmpty(parent); parent = PairKey.Parent(parent))
             {
                 ancestors.Add(parent);
             }
@@ -33,7 +33,7 @@ internal sealed class PairScanScope
 
     internal bool Covers(string key)
     {
-        for (string? path = key; !string.IsNullOrEmpty(path); path = Path.GetDirectoryName(path))
+        for (string? path = key; !string.IsNullOrEmpty(path); path = PairKey.Parent(path))
         {
             if (targets.Contains(path))
             {

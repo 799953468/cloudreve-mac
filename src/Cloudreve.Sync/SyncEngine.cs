@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace Cloudreve.Sync;
 
-internal sealed record LocalFileState(string Hash, MacFile.ContentVersion? Local = null, MacFile.ContentVersion? Remote = null);
+internal sealed record LocalFileState(string Hash, LocalFile.ContentVersion? Local = null, LocalFile.ContentVersion? Remote = null);
 internal sealed record LocalSyncState(int FormatVersion, Dictionary<string, LocalFileState> Files);
 
 public sealed class SyncEngine
@@ -18,9 +18,9 @@ public sealed class SyncEngine
 
     public SyncEngine(string localDirectory, string remoteDirectory, string stateFile)
     {
-        local = MacFile.NormalizeSystemPath(localDirectory);
-        remote = MacFile.NormalizeSystemPath(remoteDirectory);
-        state = MacFile.NormalizeSystemPath(stateFile);
+        local = LocalFile.NormalizeSystemPath(localDirectory);
+        remote = LocalFile.NormalizeSystemPath(remoteDirectory);
+        state = LocalFile.NormalizeSystemPath(stateFile);
     }
 
     public SyncResult Run()
@@ -87,7 +87,7 @@ public sealed class SyncEngine
         string normalized = path.Normalize();
         string parent = root.Normalize();
         return normalized.Equals(parent, StringComparison.OrdinalIgnoreCase)
-            || normalized.StartsWith(Path.EndsInDirectorySeparator(parent) ? parent : parent + "/", StringComparison.OrdinalIgnoreCase);
+            || normalized.StartsWith(Path.EndsInDirectorySeparator(parent) ? parent : parent + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
     private static void CheckDirectory(string directory)
@@ -95,7 +95,7 @@ public sealed class SyncEngine
         var current = new DirectoryInfo(directory);
         while (current != null)
         {
-            if (MacFile.Inspect(current.FullName) != NodeKind.Directory)
+            if (LocalFile.Inspect(current.FullName) != NodeKind.Directory)
             {
                 throw new IOException($"目录不存在、已卸载或为符号链接：{current.FullName}");
             }
@@ -125,7 +125,7 @@ public sealed class SyncEngine
                 entries.Add(key, bucket);
             }
 
-            bucket.Add(new Entry(name, MacFile.Inspect(path) ?? throw new IOException($"扫描期间文件消失：{path}")));
+            bucket.Add(new Entry(name, LocalFile.Inspect(path) ?? throw new IOException($"扫描期间文件消失：{path}")));
         }
 
         return entries;
@@ -207,10 +207,10 @@ public sealed class SyncEngine
         }
     }
 
-    private static string? Digest(string path, string? cachedHash, MacFile.ContentVersion? cachedVersion, out MacFile.ContentVersion? version)
+    private static string? Digest(string path, string? cachedHash, LocalFile.ContentVersion? cachedVersion, out LocalFile.ContentVersion? version)
     {
         CheckDirectory(Path.GetDirectoryName(path)!);
-        var type = MacFile.Inspect(path);
+        var type = LocalFile.Inspect(path);
         version = null;
         if (type == null)
         {
@@ -222,7 +222,7 @@ public sealed class SyncEngine
             throw new IOException($"文件类型已变化：{path}");
         }
 
-        version = MacFile.GetContentVersion(path);
+        version = LocalFile.GetContentVersion(path);
         if (version.HasValue && version == cachedVersion && cachedHash?.Length == 64)
         {
             return cachedHash;
@@ -230,7 +230,7 @@ public sealed class SyncEngine
         using (var input = File.OpenRead(path))
         {
             string hash = Convert.ToHexString(SHA256.HashData(input));
-            if (version.HasValue && MacFile.GetContentVersion(path) != version)
+            if (version.HasValue && LocalFile.GetContentVersion(path) != version)
             {
                 throw new IOException($"读取期间文件发生变化：{path}");
             }
@@ -238,7 +238,7 @@ public sealed class SyncEngine
         }
     }
 
-    private static MacFile.ContentVersion? CopyChecked(string source, string destination, string expectedSource, string? expectedDestination)
+    private static LocalFile.ContentVersion? CopyChecked(string source, string destination, string expectedSource, string? expectedDestination)
     {
         string stage = Path.Combine(Path.GetDirectoryName(destination)!, ".cloudreve-" + Guid.NewGuid().ToString("N"));
         try

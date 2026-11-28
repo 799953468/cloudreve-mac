@@ -6,7 +6,7 @@ internal sealed partial class FolderPairSync
 {
     private static bool BlockedPath(HashSet<string> blocked, string key)
     {
-        for (string? path = key; !string.IsNullOrEmpty(path); path = Path.GetDirectoryName(path))
+        for (string? path = key; !string.IsNullOrEmpty(path); path = PairKey.Parent(path))
         {
             if (blocked.Contains(path))
             {
@@ -86,7 +86,7 @@ internal sealed partial class FolderPairSync
                         continue;
                     }
 
-                    var removal = MacFile.ChangeDirectoryEntry(path, create: false);
+                    var removal = LocalFile.ChangeDirectoryEntry(path, create: false);
                     if (removal == DirectoryChangeResult.Applied)
                     {
                         local.Nodes.Remove(key);
@@ -113,7 +113,7 @@ internal sealed partial class FolderPairSync
                 FolderPairStore.Verify(pair);
                 await VerifyRemoteRootAsync(cancel);
                 string name = Path.GetFileName(key);
-                string relativeParent = Path.GetDirectoryName(key) ?? "";
+                string relativeParent = PairKey.Parent(key) ?? "";
                 string parent = relativeParent.Length == 0 ? pair.Remote : remote.Nodes[relativeParent].Remote!.Uri;
                 if (there == null)
                 {
@@ -146,13 +146,13 @@ internal sealed partial class FolderPairSync
                         continue;
                     }
 
-                    if (MacFile.ChangeDirectoryEntry(path, create: true) == DirectoryChangeResult.PathChanged)
+                    if (LocalFile.ChangeDirectoryEntry(path, create: true) == DirectoryChangeResult.PathChanged)
                     {
                         DeferIfChanged(key, operationRaced: true);
                         continue;
                     }
 
-                    here = new PairNode(key, NodeKind.Directory, LocalId: MacFile.Identity(path));
+                    here = new PairNode(key, NodeKind.Directory, LocalId: LocalFile.Identity(path));
                     local.Nodes.Add(key, here);
                 }
 
@@ -195,12 +195,12 @@ internal sealed partial class FolderPairSync
         string relative = "";
         foreach (string name in key.Split('/'))
         {
-            relative = Path.Combine(relative, name);
+            relative = PairKey.Combine(relative, name);
             string path = Path.Combine(pair.Local, relative);
-            var kind = MacFile.Inspect(path);
+            var kind = LocalFile.Inspect(path);
             if (local.Nodes.TryGetValue(relative, out var scanned))
             {
-                if (kind != NodeKind.Directory || MacFile.Identity(path) != scanned.LocalId)
+                if (kind != NodeKind.Directory || LocalFile.Identity(path) != scanned.LocalId)
                 {
                     return relative;
                 }
@@ -236,7 +236,7 @@ internal sealed partial class FolderPairSync
 
             foreach (var moved in localById[previous.LocalId])
             {
-                for (string? ancestor = key; !string.IsNullOrEmpty(ancestor); ancestor = Path.GetDirectoryName(ancestor))
+                for (string? ancestor = key; !string.IsNullOrEmpty(ancestor); ancestor = PairKey.Parent(ancestor))
                 {
                     if (missing.Contains(ancestor))
                     {
@@ -278,14 +278,14 @@ internal sealed partial class FolderPairSync
         FolderPairStore.Verify(pair);
         string path = Path.Combine(pair.Local, directory.Key);
         FolderPairStore.CheckDirectory(Path.GetDirectoryName(path)!);
-        string? parent = Path.GetDirectoryName(directory.Key);
+        string? parent = PairKey.Parent(directory.Key);
         if (!string.IsNullOrEmpty(parent) && (!baseline.TryGetValue(parent, out var knownParent) || knownParent.LocalId == null ||
-                                              MacFile.Identity(Path.Combine(pair.Local, parent)) != knownParent.LocalId))
+                                              LocalFile.Identity(Path.Combine(pair.Local, parent)) != knownParent.LocalId))
         {
             return false;
         }
 
-        if (MacFile.Inspect(path) != null)
+        if (LocalFile.Inspect(path) != null)
         {
             return false;
         }

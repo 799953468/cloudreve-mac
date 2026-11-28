@@ -51,7 +51,7 @@ internal sealed class PairInventory
     internal static async Task<string> HashAsync(string path, CancellationToken cancel)
     {
         FolderPairStore.CheckDirectory(Path.GetDirectoryName(path)!);
-        if (MacFile.Inspect(path) != NodeKind.File)
+        if (LocalFile.Inspect(path) != NodeKind.File)
         {
             throw new IOException(UiText.Get("文件在同步期间已变化。"));
         }
@@ -64,7 +64,7 @@ internal sealed class PairInventory
 
     internal static async Task<PairNode> ReadLocalFileAsync(string key, string path, FileBaseline? previous, CancellationToken cancel)
     {
-        var version = MacFile.GetContentVersion(path);
+        var version = LocalFile.GetContentVersion(path);
         if (version is { } current && previous is { IsDirectory: false, LocalHash.Length: 64 } &&
             previous.LocalId == current.LocalId && previous.LocalGeneration == current.Generation)
         {
@@ -73,12 +73,12 @@ internal sealed class PairInventory
 
         string hash = await HashAsync(path, cancel);
         // Never checkpoint a digest against metadata sampled only after the read.
-        if (version != null && MacFile.GetContentVersion(path) != version)
+        if (version != null && LocalFile.GetContentVersion(path) != version)
         {
             throw new IOException(UiText.Get("文件在同步期间已变化。"));
         }
 
-        return new PairNode(key, NodeKind.File, hash, LocalId: version?.LocalId ?? MacFile.Identity(path), LocalGeneration: version?.Generation ?? 0);
+        return new PairNode(key, NodeKind.File, hash, LocalId: version?.LocalId ?? LocalFile.Identity(path), LocalGeneration: version?.Generation ?? 0);
     }
 
     private sealed record LocalScanEntry(string Key, PairNode? Node, List<string>? Children = null);
@@ -124,14 +124,20 @@ internal sealed class PairInventory
         IEnumerable<string> Children(string directory, CancellationToken token)
         {
             var children = LocalChildren(directory, token);
-            return scope == null ? children : children.Where(path => scope.Visits(Path.GetRelativePath(pair.Local, path).Normalize()));
+            return scope == null ? children : children.Where(path => scope.Visits(PairKey.FromLocal(Path.GetRelativePath(pair.Local, path))));
         }
 
         async Task<LocalScanEntry> ReadEntryAsync(string path, CancellationToken token)
         {
-            string key = Path.GetRelativePath(pair.Local, path).Normalize();
+            string relative = Path.GetRelativePath(pair.Local, path);
+            string key = PairKey.FromLocal(relative);
             ValidateKey(key);
-            var kind = MacFile.Inspect(path) ?? throw new IOException(UiText.Get("扫描期间本地目录已变化。"));
+            var kind = LocalFile.Inspect(path) ?? throw new IOException(UiText.Get("扫描期间本地目录已变化。"));
+            if (OperatingSystem.IsWindows() && !relative.IsNormalized())
+            {
+                // NTFS does not normalize names, so a decomposed name cannot be reached through its normalized key.
+                return new LocalScanEntry(key, rules.Excludes(key, kind == NodeKind.Directory) ? null : new PairNode(key, NodeKind.Unsupported));
+            }
             if (rules.Excludes(key, kind == NodeKind.Directory))
             {
                 return new LocalScanEntry(key, null);
@@ -145,7 +151,7 @@ internal sealed class PairInventory
 
             if (kind == NodeKind.Directory)
             {
-                var directory = new PairNode(key, kind, LocalId: MacFile.Identity(path));
+                var directory = new PairNode(key, kind, LocalId: LocalFile.Identity(path));
                 return new LocalScanEntry(key, directory, Children(path, token).ToList());
             }
 
@@ -220,11 +226,11 @@ internal sealed class PairInventory
                 cancel.ThrowIfCancellationRequested();
                 if (Reserved(entry.Name))
                 {
-                    inventory.Excluded.Add(Path.Combine(parent.Key, entry.Name));
+                    inventory.Excluded.Add(PairKey.Combine(parent.Key, entry.Name));
                     continue;
                 }
 
-                string key = Path.Combine(parent.Key, entry.Name).Normalize();
+                string key = PairKey.Combine(parent.Key, entry.Name).Normalize();
                 if (scope != null && !scope.Visits(key))
                 {
                     continue;
@@ -238,7 +244,9 @@ internal sealed class PairInventory
                     continue;
                 }
 
-                var kind = entry.SkipSync ? NodeKind.Unsupported : entry.IsFolder ? NodeKind.Directory : NodeKind.File;
+                // Names Windows cannot store (e.g. "a:b" or "CON") are reported as conflicts instead of being synced.
+                var kind = entry.SkipSync || !LocalFile.IsLocalName(entry.Name.Normalize()) ? NodeKind.Unsupported :
+                    entry.IsFolder ? NodeKind.Directory : NodeKind.File;
                 if (inventory.Add(new PairNode(key, kind, Remote: entry)) && kind == NodeKind.Directory)
                 {
                     enqueue((key, entry.Uri));

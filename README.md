@@ -1,8 +1,8 @@
-# Cloudreve Mac
+# Cloudreve Client
 
 <img src="src/Cloudreve.Desktop/Assets/cloudreve.png" align="right" width="80" height="80" alt="Cloudreve app icon">
 
-Cloudreve Mac is an unofficial macOS sync client for [Cloudreve](https://github.com/cloudreve/Cloudreve). Pair a folder on your Cloudreve site with a folder on your Mac, then work with your files in Finder. Synced files are stored locally and open offline. No WebDAV connection or mounted network drive is required.
+Cloudreve Client is an unofficial macOS and Windows sync client for [Cloudreve](https://github.com/cloudreve/Cloudreve). Pair a folder on your Cloudreve site with a folder on your computer, then work with your files in Finder or File Explorer. Synced files are stored locally and open offline. No WebDAV connection or mounted network drive is required.
 
 [Installation](#installation) | [Connect a drive](#connect-a-drive) | [Sync behavior](#sync-behavior) | [Report an issue](https://github.com/799953468/cloudreve-mac/issues/new/choose)
 
@@ -11,13 +11,22 @@ Cloudreve Mac is an unofficial macOS sync client for [Cloudreve](https://github.
 - **Two-way sync.** Sync files and empty folders in both directions. Local changes and server notifications trigger a scan. The app polls if either watcher is unavailable.
 - **Multiple drives.** Connect more than one account or site. Each drive has its own local folder, ignore patterns, and transfer queue.
 - **Menu bar activity.** See active transfers and recent changes for one drive or all of them. The waiting list shows each file in queue order, with its drive, folder, and next operation: upload, download, or compare. Closing the panel keeps sync running; quitting the app stops it.
-- **Resumable transfers.** After a restart, Cloudreve Mac checks unfinished work before retrying it. Uploads resume from confirmed chunks and downloads from verified partial files when the storage backend supports it.
+- **Resumable transfers.** After a restart, Cloudreve Client checks unfinished work before retrying it. Uploads resume from confirmed chunks and downloads from verified partial files when the storage backend supports it.
 
 ## Installation
 
 The client requires a Cloudreve **4.12.0 or later** site. Choose a remote folder that fits on your Mac: Finder shows full local copies, not on-demand placeholders.
 
 For a packaged build, check [Releases](https://github.com/799953468/cloudreve-mac/releases) for `Cloudreve-osx-arm64.zip` (Apple Silicon) or `Cloudreve-osx-x64.zip` (Intel). Unzip the matching archive and open `Cloudreve.app`. The bundle includes its own .NET runtime. If no package is listed, build from source using the steps below. Project builds are ad-hoc signed, not notarized by Apple.
+
+### Windows
+
+Cloudreve Client also runs on Windows 10 (1809) or later. Download `Cloudreve-win-x64.zip` (or `Cloudreve-win-arm64.zip` for Arm PCs) from Releases, extract the `Cloudreve` folder to a permanent location such as `%LOCALAPPDATA%\Programs\Cloudreve`, and run `CloudreveClient.exe`. The app lives in the notification area: click the cloud icon for activity, right-click it for the menu. Builds are not code-signed, so SmartScreen may ask you to confirm the first launch.
+
+- Choosing **Connect** registers the `cloudreve://` link for your Windows account so the browser can return to this app. If you also use another Cloudreve desktop client, its sign-in links will open this app until that client registers the link again.
+- **Settings > General > Launch at startup** adds an entry under **Settings > Apps > Startup**. If you move the folder, turn the switch off and on again.
+- Settings, tokens, and logs are stored in `%LOCALAPPDATA%\CloudreveClient`.
+- Files and folders whose cloud names Windows cannot store (for example names containing `:` `?` `"`, ending in a dot or space, or reserved names such as `CON`) are reported as conflicts and not synced.
 
 ### Build from source
 
@@ -31,6 +40,13 @@ rid=osx-arm64  # Use osx-x64 on an Intel Mac.
 dotnet publish src/Cloudreve.Desktop -c Release -r "$rid" \
   --self-contained true -p:MacBundle=true
 open "artifacts/$rid/Cloudreve.app"
+```
+
+To build for Windows, install the .NET 11 SDK and run the following in PowerShell. You can also cross-build Windows packages from a Mac with the same command.
+
+```powershell
+dotnet publish src/Cloudreve.Desktop -c Release -r win-x64 --self-contained true -o artifacts/win-x64/Cloudreve
+.\artifacts\win-x64\Cloudreve\CloudreveClient.exe
 ```
 
 On macOS 13 or later, turn on **Settings > General > Launch at startup** in `Cloudreve.app` to open it automatically when you log in. If macOS asks for approval, allow Cloudreve in **System Settings > General > Login Items**. Turn the same switch off to remove the login item.
@@ -73,10 +89,10 @@ Local scans, remote scans, and transfers each start with two concurrent operatio
 ## Troubleshooting
 
 - **The browser doesn't return to the app.** Launch the built `Cloudreve.app` rather than using `dotnet run`. Start **Connect** again and keep that instance open until sign-in finishes.
-- **A transfer keeps failing.** Check `Synchronize folder pair failed` in `~/Library/Logs/Cloudreve/desktop-*.log`. `PairId` identifies the pair without exposing its paths. `Stage` and `ElapsedMs` identify what the scan was doing and how long it ran. For HTTP failures, `HttpStatus: null` means the exception carried no HTTP status code; look at `HttpRequestError`, `SocketError`, and `Causes` instead. A numeric `CloudreveCode` is an application error, not an HTTP status. Warnings include these details by default; **Settings > General > Log level > Debug** also records successful scan counts and timing.
+- **A transfer keeps failing.** Check `Synchronize folder pair failed` in `~/Library/Logs/Cloudreve/desktop-*.log` (Windows: `%LOCALAPPDATA%\CloudreveClient\Logs`). `PairId` identifies the pair without exposing its paths. `Stage` and `ElapsedMs` identify what the scan was doing and how long it ran. For HTTP failures, `HttpStatus: null` means the exception carried no HTTP status code; look at `HttpRequestError`, `SocketError`, and `Causes` instead. A numeric `CloudreveCode` is an application error, not an HTTP status. Warnings include these details by default; **Settings > General > Log level > Debug** also records successful scan counts and timing.
 - **A local directory changed since the scan.** If a directory recheck detects a change, the app defers that subtree and continues syncing unrelated edits. The debug scan summary counts these as `DeferredDirectories`, not conflicts. A new scan starts after a 30-second wait. A missing or replaced paired root still stops the scan; `DirectoryCheckFailure` in the warning describes a failed local directory or marker check without logging paths.
 - **Settings says real-time event push is lost.** Push and folder scans are independent. Look for `GET /api/v4/file/events` in the log for the disconnect reason, retry interval, or an unexpected response instead of `text/event-stream`. A confirmed reconnection clears the warning and triggers a catch-up scan. While disconnected, the scanner still polls after at most 30 seconds of waiting; it can fail separately if the site is unreachable.
-- **Reporting a problem?** Don't share `drives.json` files or the `folder-pairs` transfer cache under `~/Library/Application Support/Cloudreve/`. The session files store access and refresh tokens in plaintext, not in Keychain. Other programs running as your macOS user can read them.
+- **Reporting a problem?** Don't share `drives.json` files or the `folder-pairs` transfer cache under `~/Library/Application Support/Cloudreve/` (Windows: `%LOCALAPPDATA%\CloudreveClient\`). The session files store access and refresh tokens in plaintext, not in Keychain. Other programs running as your macOS user can read them.
 
 ## Contributing
 
@@ -85,7 +101,7 @@ For a sync bug, [file a bug report](https://github.com/799953468/cloudreve-mac/i
 The [desktop app](src/Cloudreve.Desktop) is written in C# with Avalonia. [Cloudreve.Sync](src/Cloudreve.Sync) is a separate local-directory tool; the desktop app does not invoke it. Run the [test suite](tests/Cloudreve.Sync.Tests) from the repository root:
 
 ```sh
-dotnet test --solution CloudreveMac.slnx -c Release
+dotnet test --solution CloudreveClient.slnx -c Release
 ```
 
 The tests use temporary folders, simulated server responses, and headless windows. They do not use a live Cloudreve account. Check changes to sign-in or storage-provider behavior against a real site as well.

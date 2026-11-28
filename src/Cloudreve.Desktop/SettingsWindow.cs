@@ -20,7 +20,7 @@ internal sealed partial class SettingsWindow : Window
     internal SettingsWindow(WorkspaceHost host, ILoginItemService? loginItem = null)
     {
         this.host = host;
-        this.loginItem = loginItem ?? new MacLoginItem();
+        this.loginItem = loginItem ?? (OperatingSystem.IsWindows() ? new WindowsLoginItem() : new MacLoginItem());
         InitializeComponent();
         AddButton.Content = "+  " + DesktopText.Get("popup.newDrive");
         AddButton.Click += (_, _) => { host.OpenAdd(); };
@@ -210,7 +210,7 @@ internal sealed partial class SettingsWindow : Window
 
     private static Avalonia.Media.Imaging.Bitmap LoadLogo()
     {
-        using (var stream = Avalonia.Platform.AssetLoader.Open(new Uri("avares://CloudreveMac/Assets/cloudreve.png")))
+        using (var stream = Avalonia.Platform.AssetLoader.Open(new Uri("avares://CloudreveClient/Assets/cloudreve.png")))
         {
             return new Avalonia.Media.Imaging.Bitmap(stream);
         }
@@ -337,8 +337,10 @@ internal sealed partial class SettingsWindow : Window
             toggle.IsEnabled = status != LoginItemStatus.Unavailable;
             description.Text = status switch
             {
-                LoginItemStatus.Unavailable => UiText.Get("请在 macOS 13 或更高版本从已安装的 Cloudreve.app 管理登录项。"),
-                LoginItemStatus.RequiresApproval => DesktopText.Get("settings.autoStartApproval"),
+                LoginItemStatus.Unavailable => UiText.Get(OperatingSystem.IsWindows()
+                    ? "请从发布包中的 CloudreveClient.exe 管理开机自启。"
+                    : "请在 macOS 13 或更高版本从已安装的 Cloudreve.app 管理登录项。"),
+                LoginItemStatus.RequiresApproval => DesktopText.Get(OperatingSystem.IsWindows() ? "settings.autoStartApprovalWindows" : "settings.autoStartApproval"),
                 _ => DesktopText.Get("settings.autoStartDescription")
             };
         }
@@ -388,7 +390,9 @@ internal sealed partial class SettingsWindow : Window
             return null;
         }
 
-        return error ?? UiText.Get("macOS 未更改登录项，请在系统设置的登录项中检查。");
+        return error ?? UiText.Get(OperatingSystem.IsWindows()
+            ? "Windows 未更改开机自启设置，请在“设置 > 应用 > 启动”中检查。"
+            : "macOS 未更改登录项，请在系统设置的登录项中检查。");
     }
 
     private ToggleSwitch Toggle(StackPanel group, string key, bool value, Action<bool> save)

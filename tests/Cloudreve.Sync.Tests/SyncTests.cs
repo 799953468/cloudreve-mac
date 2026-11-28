@@ -34,7 +34,7 @@ public sealed class SyncTests : IDisposable
         string hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData("abc"u8));
         File.WriteAllText(state, System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string> { ["formatVersion"] = hash }));
         Assert.Equal(1, Run().Unchanged);
-        Assert.SkipWhen(MacFile.GetContentVersion(left) == null || MacFile.GetContentVersion(right) == null, "Volume lacks content generations.");
+        Assert.SkipWhen(LocalFile.GetContentVersion(left) == null || LocalFile.GetContentVersion(right) == null, "Volume lacks content generations.");
         using (var locked = new FileStream(left, FileMode.Open, FileAccess.Read, FileShare.None))
         {
             Assert.Equal(1, Run().Unchanged);

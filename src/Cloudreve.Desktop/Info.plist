@@ -5,7 +5,7 @@
   <key>CFBundleIdentifier</key><string>io.github.cloudreve-mac.client</string>
   <key>CFBundleName</key><string>Cloudreve</string>
   <key>CFBundleDisplayName</key><string>Cloudreve</string>
-  <key>CFBundleExecutable</key><string>CloudreveMac</string>
+  <key>CFBundleExecutable</key><string>CloudreveClient</string>
   <key>CFBundleIconFile</key><string>Cloudreve.icns</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>

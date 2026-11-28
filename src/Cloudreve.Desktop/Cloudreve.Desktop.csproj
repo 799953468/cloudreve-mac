@@ -2,14 +2,18 @@
   <PropertyGroup>
     <TrayLibrary>$(BaseIntermediateOutputPath)tray/$(Configuration)/libCloudreveTray.dylib</TrayLibrary>
     <OutputType>WinExe</OutputType>
-    <AssemblyName>CloudreveMac</AssemblyName>
+    <AssemblyName>CloudreveClient</AssemblyName>
     <Version>0.1.0</Version>
     <RootNamespace>Cloudreve.Desktop</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Features>runtime-async=on</Features>
+    <TargetsWindows Condition="$(RuntimeIdentifier.StartsWith('win')) or ('$(RuntimeIdentifier)' == '' and $([MSBuild]::IsOSPlatform('Windows')))">true</TargetsWindows>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(TargetsWindows)' == 'true'">
+    <ApplicationIcon>Assets/Cloudreve.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
-    <None Include="$(TrayLibrary)" Link="libCloudreveTray.dylib" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Condition="$([MSBuild]::IsOSPlatform('OSX'))" />
+    <None Include="$(TrayLibrary)" Link="libCloudreveTray.dylib" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Condition="$([MSBuild]::IsOSPlatform('OSX')) and '$(TargetsWindows)' != 'true'" />
     <AvaloniaResource Include="Assets/cloudreve.png" />
     <AvaloniaResource Include="Assets/Fonts/Roboto.ttf" />
     <EmbeddedResource Include="Assets/English.json" LogicalName="Cloudreve.Desktop.English.json" />
@@ -17,14 +21,14 @@
     <None Update="Assets/Fonts/OFL.txt" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Assets/Cloudreve-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
     <InternalsVisibleTo Include="Cloudreve.Sync.Tests" />
-    <PackageReference Include="Avalonia.Desktop" Version="12.1.6" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.6" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.2.0" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.2.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="11.0.0" />
     <PackageReference Include="Serilog" Version="4.4.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="../Cloudreve.Sync/MacFile.cs" Link="Sync/MacFile.cs" />
+    <Compile Include="../Cloudreve.Sync/LocalFile*.cs" LinkBase="Sync" />
     <Compile Include="../Cloudreve.Sync/FailureLog.cs" Link="Sync/FailureLog.cs" />
     <Compile Remove="WorkspaceWindow.Sync.cs" />
     <Compile Remove="WorkspaceWindow.Files.cs" />

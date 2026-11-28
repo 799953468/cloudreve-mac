@@ -16,7 +16,7 @@ public sealed class DesktopLogTests
         var root = Directory.CreateTempSubdirectory();
         try
         {
-            string directory = Cloudreve.Sync.MacFile.NormalizeSystemPath(root.FullName);
+            string directory = Cloudreve.Sync.LocalFile.NormalizeSystemPath(root.FullName);
             File.WriteAllText(Path.Combine(directory, "preferences.json"), """{"ConflictAlerts":false}""");
             var settings = new DesktopPreferences(directory);
             Assert.Null(settings.Load());
@@ -34,7 +34,7 @@ public sealed class DesktopLogTests
         var root = Directory.CreateTempSubdirectory();
         try
         {
-            string directory = Cloudreve.Sync.MacFile.NormalizeSystemPath(root.FullName);
+            string directory = Cloudreve.Sync.LocalFile.NormalizeSystemPath(root.FullName);
             var settings = new DesktopPreferences(directory);
             using (var logger = DesktopLog.CreateLogger(directory, settings.LogLevel))
             {

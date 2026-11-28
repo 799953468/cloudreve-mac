@@ -11,7 +11,7 @@ internal sealed class SessionFileStore
 
     internal SessionFileStore(string directory)
     {
-        DirectoryPath = MacFile.NormalizeSystemPath(directory);
+        DirectoryPath = LocalFile.NormalizeSystemPath(directory);
         path = Path.Combine(DirectoryPath, "drives.json");
     }
 
@@ -19,8 +19,7 @@ internal sealed class SessionFileStore
 
     internal static SessionFileStore OpenDefault()
     {
-        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return new SessionFileStore(Path.Combine(home, "Library", "Application Support", "Cloudreve"));
+        return new SessionFileStore(DesktopFiles.DataDirectory);
     }
 
     internal DriveSession? Load()
@@ -46,19 +45,16 @@ internal sealed class SessionFileStore
 
     internal void Save(DriveSession session)
     {
-        if (!OperatingSystem.IsMacOS())
-        {
-            throw new PlatformNotSupportedException();
-        }
-
         Validate(session);
         PrepareDirectory(true);
         HasRegularFile();
         string temporary = Path.Combine(DirectoryPath, $".drives-{Guid.NewGuid():N}.tmp");
-        var options = new FileStreamOptions
+        var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
+        if (!OperatingSystem.IsWindows())
         {
-            Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None, UnixCreateMode = PrivateFile
-        };
+            options.UnixCreateMode = PrivateFile;
+        }
+
         try
         {
             using (var output = new FileStream(temporary, options))
@@ -85,14 +81,9 @@ internal sealed class SessionFileStore
 
     private bool PrepareDirectory(bool create)
     {
-        if (!OperatingSystem.IsMacOS())
-        {
-            throw new PlatformNotSupportedException();
-        }
-
         for (var entry = new DirectoryInfo(DirectoryPath); entry != null; entry = entry.Parent)
         {
-            if (MacFile.Inspect(entry.FullName) is not (null or NodeKind.Directory))
+            if (LocalFile.Inspect(entry.FullName) is not (null or NodeKind.Directory))
             {
                 throw new IOException(UiText.Get("登录配置目录不能是链接或普通文件。"));
             }
@@ -105,7 +96,14 @@ internal sealed class SessionFileStore
                 return false;
             }
 
-            Directory.CreateDirectory(DirectoryPath, PrivateDirectory);
+            if (OperatingSystem.IsWindows())
+            {
+                Directory.CreateDirectory(DirectoryPath);
+            }
+            else
+            {
+                Directory.CreateDirectory(DirectoryPath, PrivateDirectory);
+            }
         }
 
         RestrictPermissions(DirectoryPath, PrivateDirectory);
@@ -114,7 +112,7 @@ internal sealed class SessionFileStore
 
     private bool HasRegularFile()
     {
-        var kind = MacFile.Inspect(path);
+        var kind = LocalFile.Inspect(path);
         if (kind is not (null or NodeKind.File))
         {
             throw new IOException(UiText.Get("登录配置必须是普通文件，不能是链接。"));
@@ -125,9 +123,10 @@ internal sealed class SessionFileStore
 
     private static void RestrictPermissions(string target, UnixFileMode mode)
     {
-        if (!OperatingSystem.IsMacOS())
+        // On Windows the per-user %LOCALAPPDATA% ACL already limits access to the signed-in user and administrators.
+        if (OperatingSystem.IsWindows())
         {
-            throw new PlatformNotSupportedException();
+            return;
         }
 
         if (File.GetUnixFileMode(target) != mode)

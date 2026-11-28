@@ -11,8 +11,16 @@ permissions:
 
 jobs:
   test:
-    name: macOS tests
-    runs-on: macos-15
+    name: ${{ matrix.name }} tests
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-15
+          - name: Windows
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -22,4 +30,4 @@ jobs:
         with:
           global-json-file: global.json
       - name: Run solution tests
-        run: dotnet test --solution CloudreveMac.slnx --configuration Release
+        run: dotnet test --solution CloudreveClient.slnx --configuration Release

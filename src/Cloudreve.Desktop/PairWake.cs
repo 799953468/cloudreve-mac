@@ -176,14 +176,16 @@ internal sealed class PairWake(TimeSpan pollInterval)
             watcher = new FileSystemWatcher(root)
             {
                 IncludeSubdirectories = true,
-                NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size
+                NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size,
+                // Windows drops the whole batch when this buffer overflows; 64 KB is the largest size it allows on network shares.
+                InternalBufferSize = 64 * 1024
             };
             watcher.Changed += OnLocalChange;
             watcher.Created += OnLocalChange;
             watcher.Deleted += OnLocalChange;
             watcher.Renamed += (_, change) =>
             {
-                SignalPaths(change.OldName, change.Name);
+                SignalPaths(LocalKey(change.OldName), LocalKey(change.Name));
             };
             watcher.Error += (_, error) =>
             {
@@ -209,12 +211,17 @@ internal sealed class PairWake(TimeSpan pollInterval)
 
     private void OnLocalChange(object sender, FileSystemEventArgs change)
     {
-        SignalPaths(change.Name);
+        SignalPaths(LocalKey(change.Name));
+    }
+
+    private static string? LocalKey(string? name)
+    {
+        return name == null ? null : PairKey.FromLocal(name);
     }
 
     internal static bool IsRelevant(string? relativePath)
     {
-        return relativePath == null || !relativePath.Split(Path.DirectorySeparatorChar).Any(PairInventory.Reserved);
+        return relativePath == null || !relativePath.Split('/').Any(PairInventory.Reserved);
     }
 
     internal async Task WatchRemoteAsync(DriveClient client, string root, CancellationToken cancel, Action<bool>? connectionChanged = null, ILogger? logger = null)

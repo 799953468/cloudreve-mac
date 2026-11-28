@@ -40,7 +40,16 @@ internal sealed partial class AddDriveWindow : Window
         Reauthorizing = existing?.Pair != null;
         InitializeComponent();
         Endpoint.PlaceholderText = DesktopText.Get("addDrive.siteUrl") + " *";
-        this.openBrowser = openBrowser ?? (uri => Launcher.LaunchUriAsync(uri));
+        this.openBrowser = openBrowser ?? (uri =>
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                // The browser returns through cloudreve://; make sure it reaches this executable.
+                WindowsShell.RegisterUrlProtocol();
+            }
+
+            return Launcher.LaunchUriAsync(uri);
+        });
         if (existing != null)
         {
             Endpoint.Text = existing.Account.Site;

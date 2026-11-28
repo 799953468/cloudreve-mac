@@ -276,7 +276,7 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
 
             // Stage on the target volume so the final install is an atomic rename even on an external disk.
             cancel.ThrowIfCancellationRequested();
-            if (!MacFile.TryClone(partial.Stream, destination))
+            if (!LocalFile.TryClone(partial.Stream, destination))
             {
                 partial.Stream.Position = 0;
                 using (var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true))

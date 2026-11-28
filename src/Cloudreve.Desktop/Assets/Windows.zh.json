@@ -75,6 +75,7 @@
     "autoStart": "开机自启动",
     "autoStartDescription": "登录计算机时自动启动应用",
     "autoStartApproval": "尚未获准自启动。点按开关，前往系统设置的“登录项”中允许 Cloudreve。",
+    "autoStartApprovalWindows": "已在 Windows 中关闭自启动。点按开关，前往“设置 > 应用 > 启动”中允许 Cloudreve。",
     "fastPopupLaunch": "快速弹窗启动",
     "fastPopupLaunchDescription": "在内存中保留弹窗以加快打开速度",
     "languageSettings": "语言",

@@ -111,9 +111,9 @@ internal sealed class WorkspaceHost(DriveProfiles profiles, WindowIcon? icon = n
         }
 
         Show(Popup);
-        if (atTray && Popup.TryGetPlatformHandle() is { HandleDescriptor: "NSWindow" or "NSView" } handle)
+        if (atTray)
         {
-            MacTray.Position(handle.Handle);
+            DesktopTray.Position(Popup);
         }
     }
 
@@ -202,7 +202,7 @@ internal sealed class WorkspaceHost(DriveProfiles profiles, WindowIcon? icon = n
             throw new IOException(UiText.Get("请选择本机文件夹。"));
         }
 
-        FolderPairStore.CheckDirectory(Cloudreve.Sync.MacFile.NormalizeSystemPath(local));
+        FolderPairStore.CheckDirectory(Cloudreve.Sync.LocalFile.NormalizeSystemPath(local));
     }
 
     internal async Task RemoveAsync(MountedDrive drive)

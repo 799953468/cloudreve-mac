@@ -15,12 +15,23 @@ internal static class Program
 {
     internal static DesktopPreferences Preferences { get; } = new(SessionFileStore.OpenDefault().DirectoryPath);
 
+    // Windows only: owns the single-instance lock and receives cloudreve:// callbacks from later launches.
+    internal static WindowsInstance? Instance { get; private set; }
+
     [STAThread]
     private static int Main(string[] args)
     {
-        if (!OperatingSystem.IsMacOS())
+        if (OperatingSystem.IsWindows())
         {
-            Console.Error.WriteLine("Cloudreve Mac requires macOS.");
+            Instance = WindowsInstance.Claim(args);
+            if (Instance == null)
+            {
+                return 0;
+            }
+        }
+        else if (!OperatingSystem.IsMacOS())
+        {
+            Console.Error.WriteLine("Cloudreve requires macOS or Windows.");
             return 1;
         }
 
@@ -30,7 +41,7 @@ internal static class Program
         UiText.Language = UiText.Resolve(Preferences.Current.Language);
         try
         {
-            Log.Information("Starting Cloudreve Desktop {Version} ({Architecture}, .NET {RuntimeVersion}, PID {ProcessId}, log level {LogLevel})",
+            Log.Information("Starting Cloudreve Client {Version} ({Architecture}, .NET {RuntimeVersion}, PID {ProcessId}, log level {LogLevel})",
                 typeof(Program).Assembly.GetName().Version, RuntimeInformation.ProcessArchitecture, Environment.Version, Environment.ProcessId, Preferences.Current.LogLevel);
             if (preferencesError != null)
             {
@@ -40,7 +51,7 @@ internal static class Program
                 .UsePlatformDetect()
                 .With(new MacOSPlatformOptions { ShowInDock = false })
                 .StartWithClassicDesktopLifetime(args);
-            Log.Information("Cloudreve Desktop stopped with exit code {ExitCode} after {UptimeMs} ms", exitCode, uptime.ElapsedMilliseconds);
+            Log.Information("Cloudreve Client stopped with exit code {ExitCode} after {UptimeMs} ms", exitCode, uptime.ElapsedMilliseconds);
             return exitCode;
         }
         catch (Exception ex)
@@ -51,6 +62,10 @@ internal static class Program
         finally
         {
             Log.CloseAndFlush();
+            if (OperatingSystem.IsWindows())
+            {
+                Instance?.Dispose();
+            }
         }
     }
 }
@@ -68,13 +83,27 @@ internal sealed class DesktopApp : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             WindowIcon appIcon;
-            using (var icon = AssetLoader.Open(new Uri("avares://CloudreveMac/Assets/cloudreve.png")))
+            using (var icon = AssetLoader.Open(new Uri("avares://CloudreveClient/Assets/cloudreve.png")))
             {
                 appIcon = new WindowIcon(icon);
             }
 
             var host = new WorkspaceHost(new DriveProfiles(SessionFileStore.OpenDefault()), appIcon);
-            if (TryGetFeature(typeof(IActivatableLifetime)) is IActivatableLifetime lifetime)
+            if (OperatingSystem.IsWindows())
+            {
+                Program.Instance?.Listen(message => Dispatcher.UIThread.Post(() =>
+                {
+                    if (Uri.TryCreate(message, UriKind.Absolute, out var uri) && uri.Scheme == "cloudreve")
+                    {
+                        host.Accept(uri);
+                    }
+                    else
+                    {
+                        host.OpenPopup(atTray: true);
+                    }
+                }));
+            }
+            else if (TryGetFeature(typeof(IActivatableLifetime)) is IActivatableLifetime lifetime)
             {
                 lifetime.Activated += (_, activation) =>
                 {
@@ -85,25 +114,29 @@ internal sealed class DesktopApp : Application
                 };
             }
 
-            MacTray.Command trayAction = action => Dispatcher.UIThread.Post(() =>
+            void OnTray(TrayAction action)
             {
-                switch (action)
+                Dispatcher.UIThread.Post(() =>
                 {
-                    case 0: host.OpenPopup(atTray: true); break;
-                    case 1: host.OpenAdd(); break;
-                    case 2: host.OpenSettings(); break;
-                    case 3: desktop.TryShutdown(); break;
-                }
-            });
+                    switch (action)
+                    {
+                        case TrayAction.Show: host.OpenPopup(atTray: true); break;
+                        case TrayAction.Add: host.OpenAdd(); break;
+                        case TrayAction.Settings: host.OpenSettings(); break;
+                        case TrayAction.Quit: desktop.TryShutdown(); break;
+                    }
+                });
+            }
+
             bool en = UiText.Language == UiLanguage.English;
-            MacTray.Start(trayAction, en ? "Show" : "显示", en ? "Add new drive" : "添加新云盘", DesktopText.Get("settings.title"), en ? "Quit" : "退出");
+            DesktopTray.Start(this, OnTray, en ? "Show" : "显示", en ? "Add new drive" : "添加新云盘", DesktopText.Get("settings.title"), en ? "Quit" : "退出");
             TrayState? displayed = null;
             void RefreshTray()
             {
                 var state = host.Drives.Count == 0 ? TrayState.Disconnected : host.Drives.Max(drive => drive.ReadTrayState());
                 if (state != displayed)
                 {
-                    MacTray.Update(state, $"Cloudreve · {DesktopText.Get($"tray.{state}")}");
+                    DesktopTray.Update(state, $"Cloudreve · {DesktopText.Get($"tray.{state}")}");
                     displayed = state;
                 }
             }
@@ -115,8 +148,7 @@ internal sealed class DesktopApp : Application
             desktop.Exit += (_, _) =>
             {
                 trayTimer.Stop();
-                MacTray.Stop();
-                GC.KeepAlive(trayAction);
+                DesktopTray.Stop();
             };
 
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;

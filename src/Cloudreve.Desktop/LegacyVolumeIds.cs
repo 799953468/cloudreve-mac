@@ -41,7 +41,7 @@ internal static class LegacyVolumeIds
             {
                 conflicts.UnionWith(candidates.Select(node => node.Key));
                 conflicts.Add(key);
-                for (string? parent = Path.GetDirectoryName(key); !string.IsNullOrEmpty(parent) && !local.Nodes.ContainsKey(parent); parent = Path.GetDirectoryName(parent))
+                for (string? parent = PairKey.Parent(key); !string.IsNullOrEmpty(parent) && !local.Nodes.ContainsKey(parent); parent = PairKey.Parent(parent))
                 {
                     conflicts.Add(parent);
                 }

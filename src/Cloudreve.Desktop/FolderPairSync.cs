@@ -351,7 +351,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                 }
 
                 string extension = Path.GetExtension(key);
-                string copyKey = Path.Combine(Path.GetDirectoryName(key) ?? "", "local-copy-" + Guid.NewGuid().ToString("N") + extension);
+                string copyKey = PairKey.Combine(PairKey.Parent(key) ?? "", "local-copy-" + Guid.NewGuid().ToString("N") + extension);
                 if (rules.Excludes(copyKey))
                 {
                     throw new IOException(UiText.Get("本地副本将被忽略，未处理。"));
@@ -387,7 +387,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                     throw new IOException(UiText.Get("上传回读与本地内容不一致，未记录为已解决。"));
                 }
 
-                baseline[key] = new FileBaseline(hash, file.Version!, MacFile.Identity(path), file.Id);
+                baseline[key] = new FileBaseline(hash, file.Version!, LocalFile.Identity(path), file.Id);
             }
             else if (choice == ConflictChoice.KeepLocal && file != null)
             {
@@ -513,7 +513,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
         for (int i = 0; i < parts.Length; i++)
         {
             path = Path.Combine(path, parts[i]);
-            var kind = MacFile.Inspect(path);
+            var kind = LocalFile.Inspect(path);
             if (kind == null && expectedHash == null)
             {
                 return;
@@ -522,7 +522,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
             if (i == parts.Length - 1 && kind == NodeKind.File && expectedHash != null)
             {
                 if (scanned?.Hash == expectedHash && scanned.LocalGeneration != 0 &&
-                    MacFile.GetContentVersion(path) is { } current && current.LocalId == scanned.LocalId && current.Generation == scanned.LocalGeneration)
+                    LocalFile.GetContentVersion(path) is { } current && current.LocalId == scanned.LocalId && current.Generation == scanned.LocalGeneration)
                 {
                     return;
                 }
@@ -548,9 +548,13 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
         foreach (string name in relative.Split('/', StringSplitOptions.RemoveEmptyEntries))
         {
             parent = Path.Combine(parent, name);
-            if (MacFile.Inspect(parent) == null)
+            if (LocalFile.Inspect(parent) == null)
             {
                 Directory.CreateDirectory(parent);
+                if (parent == Path.Combine(pair.Local, PairInventory.Recovery))
+                {
+                    LocalFile.Hide(parent);
+                }
             }
 
             FolderPairStore.CheckDirectory(parent);
@@ -559,8 +563,8 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
 
     private string RecoveryPath(string key)
     {
-        string backup = Path.Combine(PairInventory.Recovery, Guid.NewGuid().ToString("N"), key);
-        EnsureLocalDirectory(Path.GetDirectoryName(backup)!);
+        string backup = PairKey.Combine(PairKey.Combine(PairInventory.Recovery, Guid.NewGuid().ToString("N")), key);
+        EnsureLocalDirectory(PairKey.Parent(backup)!);
         FolderPairStore.CheckDirectory(Path.GetDirectoryName(Path.Combine(pair.Local, key))!);
         return Path.Combine(pair.Local, backup);
     }
@@ -582,7 +586,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
 
     private async Task<PairNode> InstallDownloadAsync(string key, DriveEntry file, string? expectedHash, SyncActivity? progress, CancellationToken cancel, TransferFiles? files = null)
     {
-        string parent = Path.GetDirectoryName(key) ?? "";
+        string parent = PairKey.Parent(key) ?? "";
         await RequireLocalAsync(key, expectedHash, cancel);
         EnsureLocalDirectory(parent);
         string path = Path.Combine(pair.Local, key);
@@ -617,7 +621,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                 File.Move(temp, path, false);
             }
 
-            string? installedId = MacFile.Identity(path);
+            string? installedId = LocalFile.Identity(path);
             return installedId == received.LocalId ? received : received with { LocalId = installedId, LocalGeneration = 0 };
         }
         finally

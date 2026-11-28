@@ -371,7 +371,7 @@ public sealed class FolderPairSyncTests : IDisposable
         Assert.Empty(site.TrashRequests);
 
         var baseline = store.ReadBaseline(pair);
-        Assert.All(baseline, entry => Assert.Equal(MacFile.Identity(Path.Combine(pair.Local, entry.Key)), entry.Value.LocalId));
+        Assert.All(baseline, entry => Assert.Equal(LocalFile.Identity(Path.Combine(pair.Local, entry.Key)), entry.Value.LocalId));
         int transfers = site.Transfers;
         Assert.Empty((await RunAsync()).Conflicts);
         Assert.Equal(transfers, site.Transfers);
@@ -418,7 +418,7 @@ public sealed class FolderPairSyncTests : IDisposable
         string folder = Directory.CreateDirectory(Path.Combine(pair.Local, "notes")).FullName;
         File.WriteAllText(Path.Combine(folder, "keep"), "original");
         await RunAsync();
-        var volume = MacFile.ReadVolumeIdentity(folder);
+        var volume = LocalFile.ReadVolumeIdentity(folder);
         Assert.SkipWhen(volume == null, "Volume has no persistent UUID.");
         Assert.StartsWith(volume.Value.Uuid.ToString("N") + ":", store.ReadBaseline(pair)["notes"].LocalId);
         SetBaselineVolume(Guid.NewGuid().ToString("N"));
@@ -780,7 +780,7 @@ public sealed class FolderPairSyncTests : IDisposable
         await RunAsync();
         string path = Path.Combine(pair.Local, "doc");
         var baseline = store.ReadBaseline(pair)["doc"];
-        Assert.SkipWhen(MacFile.GetContentVersion(path) == null, "Volume does not provide a content generation.");
+        Assert.SkipWhen(LocalFile.GetContentVersion(path) == null, "Volume does not provide a content generation.");
         Assert.NotEqual(0u, baseline.LocalGeneration);
         Assert.Equal(Convert.ToHexString(SHA256.HashData("original"u8)), baseline.LocalHash);
         int transfers = site.Transfers;
@@ -1016,16 +1016,16 @@ public sealed class FolderPairSyncTests : IDisposable
         Directory.CreateDirectory(Path.Combine(outside, "keep"));
         string link = Path.Combine(pair.Local, "link");
         Directory.CreateSymbolicLink(link, outside);
-        Assert.Equal(DirectoryChangeResult.PathChanged, MacFile.ChangeDirectoryEntry(Path.Combine(link, "new"), create: true));
-        Assert.Equal(DirectoryChangeResult.PathChanged, MacFile.ChangeDirectoryEntry(Path.Combine(link, "keep"), create: false));
+        Assert.Equal(DirectoryChangeResult.PathChanged, LocalFile.ChangeDirectoryEntry(Path.Combine(link, "new"), create: true));
+        Assert.Equal(DirectoryChangeResult.PathChanged, LocalFile.ChangeDirectoryEntry(Path.Combine(link, "keep"), create: false));
         Assert.False(Directory.Exists(Path.Combine(outside, "new")));
         Assert.True(Directory.Exists(Path.Combine(outside, "keep")));
 
         string missing = Path.Combine(pair.Local, "missing");
-        Assert.Equal(DirectoryChangeResult.PathChanged, MacFile.ChangeDirectoryEntry(Path.Combine(missing, "new"), create: true));
+        Assert.Equal(DirectoryChangeResult.PathChanged, LocalFile.ChangeDirectoryEntry(Path.Combine(missing, "new"), create: true));
         Assert.False(Directory.Exists(missing));
-        Assert.Equal(DirectoryChangeResult.PathChanged, MacFile.ChangeDirectoryEntry(link, create: true));
-        Assert.Equal(DirectoryChangeResult.PathChanged, MacFile.ChangeDirectoryEntry(link, create: false));
+        Assert.Equal(DirectoryChangeResult.PathChanged, LocalFile.ChangeDirectoryEntry(link, create: true));
+        Assert.Equal(DirectoryChangeResult.PathChanged, LocalFile.ChangeDirectoryEntry(link, create: false));
         Assert.NotNull(new DirectoryInfo(link).LinkTarget);
     }
 

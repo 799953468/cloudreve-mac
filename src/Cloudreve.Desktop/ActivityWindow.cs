@@ -35,7 +35,7 @@ internal sealed record WaitingRow(string Drive, WaitingFile File)
     {
         get
         {
-            string? parent = Path.GetDirectoryName(File.Key);
+            string? parent = PairKey.Parent(File.Key);
             return string.IsNullOrEmpty(parent) ? Drive : $"{Drive} · {parent}";
         }
     }

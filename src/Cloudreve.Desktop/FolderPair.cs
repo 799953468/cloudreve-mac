@@ -26,7 +26,7 @@ internal sealed class FolderPairStore
     {
         string identity = JsonSerializer.Serialize(new[] { session.Site, session.UserId, session.DriveId, session.Root }, DesktopJson.Default.StringArray);
         string key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
-        settings = MacFile.NormalizeSystemPath(settingsRoot);
+        settings = LocalFile.NormalizeSystemPath(settingsRoot);
         directory = Path.Combine(settings, key);
     }
 
@@ -43,7 +43,7 @@ internal sealed class FolderPairStore
 
     internal FolderPair Create(string localDirectory, string remote, string remoteId)
     {
-        string local = MacFile.NormalizeSystemPath(localDirectory);
+        string local = LocalFile.NormalizeSystemPath(localDirectory);
         CheckDirectory(local);
         if (IsWithin(settings, local) || IsWithin(local, settings))
         {
@@ -63,6 +63,8 @@ internal sealed class FolderPairStore
         {
             writer.Write(pair.Marker.ToString("N"));
         }
+
+        LocalFile.Hide(marker);
 
         try
         {
@@ -85,14 +87,14 @@ internal sealed class FolderPairStore
             {
                 CheckDirectory(pair.Local);
                 string marker = Path.Combine(pair.Local, MarkerName);
-                if (MacFile.Inspect(marker) == NodeKind.File && new FileInfo(marker).Length <= 128 && File.ReadAllText(marker) == pair.Marker.ToString("N"))
+                if (LocalFile.Inspect(marker) == NodeKind.File && new FileInfo(marker).Length <= 128 && File.ReadAllText(marker) == pair.Marker.ToString("N"))
                 {
                     File.Delete(marker);
                 }
             }
 
             string cache = CachePath(pair);
-            if (MacFile.Inspect(cache) == NodeKind.Directory)
+            if (LocalFile.Inspect(cache) == NodeKind.Directory)
             {
                 Directory.Delete(cache, true);
             }
@@ -109,7 +111,7 @@ internal sealed class FolderPairStore
     {
         CheckDirectory(pair.Local);
         string path = Path.Combine(pair.Local, MarkerName);
-        if (MacFile.Inspect(path) != NodeKind.File || new FileInfo(path).Length > 128 || File.ReadAllText(path) != pair.Marker.ToString("N"))
+        if (LocalFile.Inspect(path) != NodeKind.File || new FileInfo(path).Length > 128 || File.ReadAllText(path) != pair.Marker.ToString("N"))
         {
             throw new IOException(UiText.Get("本地同步目录已移动、被替换或磁盘未挂载；未同步。"))
             {
@@ -148,9 +150,11 @@ internal sealed class FolderPairStore
     {
         CheckDirectory(directory);
         string path = CachePath(pair);
-        if (!OperatingSystem.IsMacOS())
+        if (OperatingSystem.IsWindows())
         {
-            throw new PlatformNotSupportedException();
+            Directory.CreateDirectory(path);
+            CheckDirectory(path);
+            return path;
         }
 
         const UnixFileMode privateDirectory = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
@@ -233,7 +237,7 @@ internal sealed class FolderPairStore
     {
         for (var dir = new DirectoryInfo(path); dir != null; dir = dir.Parent)
         {
-            var kind = MacFile.Inspect(dir.FullName);
+            var kind = LocalFile.Inspect(dir.FullName);
             if (kind != NodeKind.Directory)
             {
                 var reason = kind switch
@@ -254,7 +258,7 @@ internal sealed class FolderPairStore
     {
         path = Path.GetFullPath(path).Normalize();
         root = Path.GetFullPath(root).Normalize();
-        return path.Equals(root, StringComparison.OrdinalIgnoreCase) || path.StartsWith(root.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase);
+        return path.Equals(root, StringComparison.OrdinalIgnoreCase) || path.StartsWith(DriveProfiles.AsDirectory(root), StringComparison.OrdinalIgnoreCase);
     }
 
     internal static void WriteJson<T>(string path, T value, JsonTypeInfo<T> typeInfo, bool overwrite = true)
