@@ -3,6 +3,38 @@ using Serilog.Events;
 
 namespace Cloudreve.Desktop;
 
+internal enum ConflictReason
+{
+    ContentsDiffer,
+    DeletedLocally,
+    DeletedInCloud,
+    NeedsManualReview
+}
+
+// One unresolved path from the latest scans. Choice is null when the app cannot offer an automatic resolution,
+// for example a file and a folder sharing one name, or a name this system cannot store.
+internal sealed record PairConflict(string Key, FileConflict? Choice)
+{
+    internal ConflictReason Reason
+    {
+        get
+        {
+            return Choice switch
+            {
+                null => ConflictReason.NeedsManualReview,
+                { LocalHash: null } => ConflictReason.DeletedLocally,
+                { Remote: null } => ConflictReason.DeletedInCloud,
+                _ => ConflictReason.ContentsDiffer
+            };
+        }
+    }
+
+    internal bool CanKeepBoth
+    {
+        get { return Reason == ConflictReason.ContentsDiffer; }
+    }
+}
+
 // A mount lives for the session, independently of all three desktop windows.
 internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore store, HttpClient api, HttpClient storage)
 {
@@ -12,7 +44,13 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
     private PairWake? wake;
     private readonly object bindingGate = new();
     private object? binding;
-    private HashSet<string> conflicts = [];
+    private readonly object conflictGate = new();
+    private Dictionary<string, PairConflict> conflicts = new(StringComparer.OrdinalIgnoreCase);
+    private PairConflict[] conflictList = [];
+    // A pass and a conflict resolution both take the pair lock, which does not wait; take turns here instead.
+    private readonly SemaphoreSlim passGate = new(1, 1);
+    private FolderPairSync? engine;
+    private ILogger? pairLogger;
     private bool runningPass;
     private bool remoteUnavailable;
 
@@ -25,6 +63,19 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
     internal bool PushLost { get; private set; }
     internal bool Expired { get; private set; }
     internal event Action<string>? Notice;
+
+    internal IReadOnlyList<PairConflict> Conflicts
+    {
+        get
+        {
+            lock (conflictGate)
+            {
+                return conflictList;
+            }
+        }
+    }
+
+    internal int ConflictRevision { get; private set; }
 
     internal TrayState ReadTrayState()
     {
@@ -39,6 +90,14 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
         Expired = account.RefreshExpires <= DateTimeOffset.UtcNow;
         PushLost = false;
         remoteUnavailable = false;
+        engine = null;
+        pairLogger = null;
+        lock (conflictGate)
+        {
+            conflicts = new Dictionary<string, PairConflict>(StringComparer.OrdinalIgnoreCase);
+            conflictList = [];
+            ConflictRevision++;
+        }
         PairStore = new FolderPairStore(Path.Combine(Store.DirectoryPath, "folder-pairs"), account);
         Pair = PairStore.Load();
         if (Pair != null)
@@ -63,9 +122,10 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
         if (Pair != null)
         {
             wake = new PairWake();
-            var engine = new FolderPairSync(PairStore, Pair, client, Activity, wake.BeginFullRemoteInventory);
+            engine = new FolderPairSync(PairStore, Pair, client, Activity, wake.BeginFullRemoteInventory);
             watcher = wake.WatchLocal(Pair.Local);
             ILogger logger = Log.Logger.ForContext("PairId", Pair.Marker);
+            pairLogger = logger;
             workers = Task.WhenAll(capacity, ScanAsync(engine, wake, logger, lifetime.Token),
                 wake.WatchRemoteAsync(client, Pair.Remote, lifetime.Token, connected => { PushLost = !connected; }, logger));
         }
@@ -112,21 +172,30 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
                 PairScanScope? retryScope = null;
                 try
                 {
-                    runningPass = true;
-                    var result = await Task.Run(() => engine.RunAsync(cancel, attempt, scope), cancel);
+                    PairSyncResult result;
+                    await passGate.WaitAsync(cancel);
+                    try
+                    {
+                        runningPass = true;
+                        result = await Task.Run(() => engine.RunAsync(cancel, attempt, scope), cancel);
+                    }
+                    finally
+                    {
+                        passGate.Release();
+                    }
+
                     remoteUnavailable = false;
                     // The pass finished everything else, so even after a full scan only the deferred paths need another look.
                     retry = result.DeferredPaths is { Count: > 0 };
                     retryScope = retry ? new PairScanScope(result.DeferredPaths!) : null;
-                    logger.ForContext("ScanScope", attempt.Scope == null ? "Full" : "Paths").ForContext("FullScanReason", attempt.Scope == null ? attempt.FullReason : null).Debug("Folder pair scan finished in {ElapsedMs} ms: {Uploaded} uploaded, {Downloaded} downloaded, {Removed} removed, {Conflicts} conflicts, {DeferredDirectories} directories deferred, {DeferredFiles} files deferred",
+                    // Passes that changed nothing stay at Debug so periodic scans do not flood the log.
+                    var summaryLevel = result.Uploaded + result.Downloaded + result.Removed + result.Conflicts.Count > 0 ? LogEventLevel.Information : LogEventLevel.Debug;
+                    logger.ForContext("ScanScope", attempt.Scope == null ? "Full" : "Paths").ForContext("FullScanReason", attempt.Scope == null ? attempt.FullReason : null).Write(summaryLevel, "Folder pair scan finished in {ElapsedMs} ms: {Uploaded} uploaded, {Downloaded} downloaded, {Removed} removed, {Conflicts} conflicts, {DeferredDirectories} directories deferred, {DeferredFiles} files deferred",
                         attempt.ElapsedMs, result.Uploaded, result.Downloaded, result.Removed, result.Conflicts.Count, result.DeferredDirectories, result.DeferredFiles);
-                    if (Program.Preferences.Current.ConflictAlerts && result.Conflicts.Any(key => !conflicts.Contains(key)))
+                    if (UpdateConflicts(result, attempt.Scope, logger) && Program.Preferences.Current.ConflictAlerts)
                     {
                         Notice?.Invoke(UiText.Get("app.syncConflictNotice"));
                     }
-
-                    conflicts.RemoveWhere(key => attempt.Scope == null || attempt.Scope.Covers(key));
-                    conflicts.UnionWith(result.Conflicts);
                 }
                 catch (Exception ex) when (!cancel.IsCancellationRequested)
                 {
@@ -157,6 +226,103 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
         catch (Exception) when (cancel.IsCancellationRequested)
         {
         }
+    }
+
+    // Replaces the conflicts this pass covered. Returns whether any of them is new.
+    internal bool UpdateConflicts(PairSyncResult result, PairScanScope? scope, ILogger logger)
+    {
+        var choices = new Dictionary<string, FileConflict>(StringComparer.OrdinalIgnoreCase);
+        foreach (var choice in result.Choices)
+        {
+            choices[choice.Key] = choice;
+        }
+
+        var added = new List<PairConflict>();
+        var cleared = new List<string>();
+        lock (conflictGate)
+        {
+            var next = new Dictionary<string, PairConflict>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (key, conflict) in conflicts)
+            {
+                if (scope != null && !scope.Covers(key))
+                {
+                    next[key] = conflict;
+                }
+            }
+
+            foreach (string key in result.Conflicts)
+            {
+                var conflict = new PairConflict(key, choices.GetValueOrDefault(key));
+                next[key] = conflict;
+                if (!conflicts.ContainsKey(key))
+                {
+                    added.Add(conflict);
+                }
+            }
+
+            cleared.AddRange(conflicts.Keys.Where(key => !next.ContainsKey(key)));
+            bool changed = added.Count > 0 || cleared.Count > 0 || next.Any(entry => !conflicts.TryGetValue(entry.Key, out var old) || old != entry.Value);
+            if (changed)
+            {
+                conflicts = next;
+                conflictList = next.Values.OrderBy(conflict => conflict.Key, StringComparer.OrdinalIgnoreCase).ToArray();
+                ConflictRevision++;
+            }
+        }
+
+        // Relative paths only: the pair root stays out of the log, as everywhere else.
+        foreach (var conflict in added)
+        {
+            logger.ForContext("LocalHash", conflict.Choice?.LocalHash).ForContext("RemoteVersion", conflict.Choice?.Remote?.Version)
+                .Warning("Sync conflict at {ConflictKey}: {ConflictReason}; the path is not synced until it is resolved", conflict.Key, conflict.Reason);
+        }
+
+        foreach (string key in cleared)
+        {
+            logger.Information("Sync conflict cleared at {ConflictKey}", key);
+        }
+
+        return added.Count > 0;
+    }
+
+    internal async Task ResolveConflictAsync(PairConflict conflict, ConflictChoice choice, CancellationToken cancel = default)
+    {
+        var current = engine;
+        var logger = pairLogger ?? Log.Logger;
+        if (current == null || conflict.Choice == null)
+        {
+            throw new InvalidOperationException(UiText.Get("pair.conflictFromOtherPair"));
+        }
+
+        logger.Information("Resolving sync conflict at {ConflictKey} ({ConflictReason}) with {ConflictChoice}", conflict.Key, conflict.Reason, choice);
+        string? copyKey;
+        await passGate.WaitAsync(cancel);
+        try
+        {
+            copyKey = await Task.Run(() => current.ResolveConflictAsync(conflict.Choice, choice, cancel), cancel);
+        }
+        catch (Exception ex)
+        {
+            logger.ForContext("ConflictKey", conflict.Key).ForContext("ConflictChoice", choice).WriteFailure(LogEventLevel.Warning, "Resolve sync conflict", ex);
+            throw;
+        }
+        finally
+        {
+            passGate.Release();
+        }
+
+        lock (conflictGate)
+        {
+            if (conflicts.Remove(conflict.Key))
+            {
+                conflictList = conflicts.Values.OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase).ToArray();
+                ConflictRevision++;
+            }
+        }
+
+        logger.Information("Resolved sync conflict at {ConflictKey} with {ConflictChoice}", conflict.Key, choice);
+        // The next path scan records the outcome and uploads a kept copy; it reports the path again if it still conflicts.
+        wake?.SignalPaths(copyKey == null ? [conflict.Key] : [conflict.Key, copyKey]);
     }
 
     internal void SaveRules(string text)

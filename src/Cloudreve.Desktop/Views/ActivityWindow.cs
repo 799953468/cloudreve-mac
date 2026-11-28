@@ -66,6 +66,11 @@ internal sealed partial class ActivityWindow : Window
     private ScanRow[] displayedScans = [];
     private WaitingRow[] displayedWaiting = [];
     private MountedDrive? selected;
+    // Conflict rows are rebuilt whenever a drive's list changes; resolution state outlives the rows.
+    private const int MaxConflictRows = 50;
+    private readonly Dictionary<MountedDrive, int> conflictRevisions = [];
+    private readonly HashSet<(MountedDrive Drive, string Key)> resolving = [];
+    private readonly Dictionary<(MountedDrive Drive, string Key), string> resolveErrors = [];
 
     private sealed class ActivityRow(MountedDrive drive, ActivityEntry entry) : Grid
     {
@@ -150,6 +155,7 @@ internal sealed partial class ActivityWindow : Window
         }
 
         snapshots.Clear();
+        conflictRevisions.Clear();
         Chips.Children.Clear();
         AddFilter(null, UiText.Get("popup.allDrives"));
         foreach (var drive in host.Drives)
@@ -182,6 +188,7 @@ internal sealed partial class ActivityWindow : Window
             }
 
             snapshots.Clear();
+            conflictRevisions.Clear();
             Refresh(true);
             TaskScroll.Offset = default;
         };
@@ -191,8 +198,16 @@ internal sealed partial class ActivityWindow : Window
     internal void Refresh(bool force = false)
     {
         bool changed = force;
+        bool conflictsChanged = force;
         foreach (var drive in host.Drives.Where(d => selected == null || d == selected))
         {
+            int conflictRevision = drive.ConflictRevision;
+            if (!conflictRevisions.TryGetValue(drive, out int shown) || shown != conflictRevision)
+            {
+                conflictRevisions[drive] = conflictRevision;
+                conflictsChanged = changed = true;
+            }
+
             var snapshot = drive.Activity.ChangesSince(snapshots.GetValueOrDefault(drive)?.Revision ?? -1);
             if (snapshot != null)
             {
@@ -217,7 +232,15 @@ internal sealed partial class ActivityWindow : Window
         var scans = snapshots.Where(s => s.Value.Scan.Phase != ScanPhase.Idle)
             .Select(s => new ScanRow(s.Key.Account.Name, s.Value.Scan)).ToArray();
         bool scanning = scans.Any(row => !row.Failed);
-        bool idle = scans.Length == 0 && active.Length == 0 && waitingCount == 0;
+        int conflictCount = conflictRevisions.Keys.Sum(drive => drive.Conflicts.Count);
+        bool quiet = scans.Length == 0 && active.Length == 0 && waitingCount == 0;
+        bool idle = quiet && conflictCount == 0;
+        bool attention = quiet && conflictCount > 0;
+        if (conflictsChanged)
+        {
+            RenderConflicts();
+        }
+
         Empty.IsVisible = idle && recent.Length == 0;
         TaskScroll.IsVisible = !Empty.IsVisible;
         ScanSection.IsVisible = scans.Length > 0;
@@ -255,13 +278,156 @@ internal sealed partial class ActivityWindow : Window
             _ when scanning => UiText.Get("popup.scanning"),
             _ when showFailure => UiText.Get("popup.scanFailed"),
             _ when waitingCount > 0 => waitingLabel,
+            _ when conflictCount > 0 => UiText.Get("popup.conflictStatus", ("count", conflictCount)),
             _ => UiText.Get("popup.upToDate")
         };
-        StatusIcon.Data = StreamGeometry.Parse(showFailure ? "M12 2 1 21h22z M11 8h2v7h-2z M11 17h2v2h-2z" :
+        StatusIcon.Data = StreamGeometry.Parse(showFailure || attention ? "M12 2 1 21h22z M11 8h2v7h-2z M11 17h2v2h-2z" :
             idle ? "M12 2a10 10 0 1 0 0 20a10 10 0 1 0 0-20 M10 17l-5-5 1.5-1.5 3.5 3.5 7-7 1.5 1.5z" : "M4 5v5h5L7 8a6 6 0 1 1-1 7H3a9 9 0 1 0 2-9z");
         StatusIcon.Classes.Set("failure", showFailure);
+        StatusIcon.Classes.Set("warning", attention && !showFailure);
         StatusIcon.Classes.Set("healthy", idle);
         StatusIcon.Classes.Set("spinning", active.Length > 0 || scanning);
+    }
+
+    private void RenderConflicts()
+    {
+        var items = conflictRevisions.Keys.SelectMany(drive => drive.Conflicts.Select(conflict => (Drive: drive, Conflict: conflict))).ToArray();
+        // Forget state for conflicts that a scan or another resolution already cleared.
+        var present = items.Select(item => (item.Drive, item.Conflict.Key)).ToHashSet();
+        foreach (var stale in resolveErrors.Keys.Where(id => !present.Contains(id)).ToArray())
+        {
+            resolveErrors.Remove(stale);
+        }
+
+        ConflictSection.IsVisible = items.Length > 0;
+        ConflictTitle.Text = UiText.Get("popup.conflicts", ("count", items.Length));
+        ConflictRows.Children.Clear();
+        foreach (var (drive, conflict) in items.Take(MaxConflictRows))
+        {
+            ConflictRows.Children.Add(ConflictRow(drive, conflict));
+        }
+
+        int remaining = items.Length - MaxConflictRows;
+        ConflictMore.IsVisible = remaining > 0;
+        ConflictMore.Text = remaining > 0 ? UiText.Get("popup.conflictsMore", ("count", remaining)) : null;
+    }
+
+    private Control ConflictRow(MountedDrive drive, PairConflict conflict)
+    {
+        var id = (drive, conflict.Key);
+        bool busy = resolving.Contains(id);
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("32,*"), ColumnSpacing = 8, Margin = new Thickness(16, 10) };
+        var icon = FileIcons.Create(conflict.Key, false);
+        icon.VerticalAlignment = VerticalAlignment.Top;
+        row.Children.Add(icon);
+        var lines = new StackPanel { Spacing = 3 };
+        Grid.SetColumn(lines, 1);
+        row.Children.Add(lines);
+        lines.Children.Add(new TextBlock
+        {
+            Text = Path.GetFileName(conflict.Key), TextTrimming = TextTrimming.CharacterEllipsis, FontWeight = FontWeight.Medium, LineHeight = 20
+        });
+        string? parent = PairKey.Parent(conflict.Key);
+        string where = string.IsNullOrEmpty(parent) ? drive.Account.Name : $"{drive.Account.Name} · {parent}";
+        lines.Children.Add(new TextBlock { Text = where, Classes = { "secondary" }, FontSize = 12, LineHeight = 16, TextTrimming = TextTrimming.CharacterEllipsis });
+        ToolTip.SetTip(row, conflict.Key);
+        string reason = UiText.Get(conflict.Reason switch
+        {
+            ConflictReason.DeletedLocally => "popup.conflictDeletedLocally",
+            ConflictReason.DeletedInCloud => "popup.conflictDeletedInCloud",
+            ConflictReason.NeedsManualReview => "popup.conflictManual",
+            _ => "popup.conflictContentsDiffer"
+        });
+        lines.Children.Add(new TextBlock { Text = reason, Classes = { "warning" }, FontSize = 12, LineHeight = 16, TextWrapping = TextWrapping.Wrap });
+        if (resolveErrors.TryGetValue(id, out string? error))
+        {
+            lines.Children.Add(new TextBlock
+            {
+                Text = UiText.Get("popup.resolveFailed", ("message", error)), Classes = { "failure" }, FontSize = 12, LineHeight = 16, TextWrapping = TextWrapping.Wrap
+            });
+        }
+
+        var actions = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
+        lines.Children.Add(actions);
+        if (busy)
+        {
+            actions.Children.Add(new TextBlock { Text = UiText.Get("popup.processing"), Classes = { "secondary" }, FontSize = 12 });
+            return row;
+        }
+
+        if (conflict.Choice != null)
+        {
+            actions.Children.Add(ResolveButton(drive, conflict, ConflictChoice.KeepLocal, "popup.keepLocal",
+                conflict.Reason == ConflictReason.DeletedLocally ? "popup.keepLocalTrashTip" : "popup.keepLocalUploadTip"));
+            actions.Children.Add(ResolveButton(drive, conflict, ConflictChoice.KeepRemote, "popup.keepRemote", conflict.Reason switch
+            {
+                ConflictReason.DeletedLocally => "popup.keepRemoteRestoreTip",
+                ConflictReason.DeletedInCloud => "popup.keepRemoteRecoverTip",
+                _ => "popup.keepRemoteDownloadTip"
+            }));
+            if (conflict.CanKeepBoth)
+            {
+                actions.Children.Add(ResolveButton(drive, conflict, ConflictChoice.KeepBoth, "popup.keepBoth", "popup.keepBothTip"));
+            }
+        }
+        else if (drive.Pair != null)
+        {
+            var show = ActionButton(UiText.Get("popup.showInFolder"), null);
+            string path = Path.Combine(drive.Pair.Local, conflict.Key);
+            show.Click += (_, _) => { DesktopFiles.Reveal(path); };
+            actions.Children.Add(show);
+        }
+
+        return row;
+    }
+
+    private static Button ActionButton(string label, string? tip)
+    {
+        var button = new Button
+        {
+            Content = label, Classes = { "tool", "subtle" }, FontSize = 12, MinHeight = 26, Padding = new Thickness(10, 2), Margin = new Thickness(0, 0, 6, 4)
+        };
+        if (tip != null)
+        {
+            ToolTip.SetTip(button, tip);
+        }
+
+        Avalonia.Automation.AutomationProperties.SetName(button, label);
+        return button;
+    }
+
+    private Button ResolveButton(MountedDrive drive, PairConflict conflict, ConflictChoice choice, string labelKey, string tipKey)
+    {
+        var button = ActionButton(UiText.Get(labelKey), UiText.Get(tipKey));
+        button.Click += async (_, _) => { await ResolveAsync(drive, conflict, choice); };
+        return button;
+    }
+
+    private async Task ResolveAsync(MountedDrive drive, PairConflict conflict, ConflictChoice choice)
+    {
+        var id = (drive, conflict.Key);
+        if (!resolving.Add(id))
+        {
+            return;
+        }
+
+        resolveErrors.Remove(id);
+        RenderConflicts();
+        try
+        {
+            await drive.ResolveConflictAsync(conflict, choice);
+        }
+        catch (Exception ex)
+        {
+            // MountedDrive already logged the failure with its details.
+            resolveErrors[id] = ex.Message;
+        }
+        finally
+        {
+            resolving.Remove(id);
+        }
+
+        Refresh(true);
     }
 
     private void UpdateRows(StackPanel panel, IEnumerable<(MountedDrive Drive, ActivityEntry Entry, ActivityTransfer? Transfer)> items, bool active, bool animate)

@@ -337,7 +337,8 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
         }
     }
 
-    internal async Task ResolveConflictAsync(FileConflict conflict, ConflictChoice choice, CancellationToken cancel)
+    // Returns the key of the local copy that KeepBoth created, so the caller can scan it.
+    internal async Task<string?> ResolveConflictAsync(FileConflict conflict, ConflictChoice choice, CancellationToken cancel)
     {
         PairInventory.ValidateKey(conflict.Key);
         if (conflict.PairId != pair.Marker || !Enum.IsDefined(choice))
@@ -362,6 +363,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
             await ResolveRemoteAsync(key, file, false, cancel);
             await RequireLocalAsync(key, hash, cancel);
             var baseline = store.ReadBaseline(pair);
+            string? copyKey = null;
             if (choice == ConflictChoice.KeepBoth)
             {
                 if (hash == null || file == null)
@@ -370,7 +372,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
                 }
 
                 string extension = Path.GetExtension(key);
-                string copyKey = PairKey.Combine(PairKey.Parent(key) ?? "", "local-copy-" + Guid.NewGuid().ToString("N") + extension);
+                copyKey = PairKey.Combine(PairKey.Parent(key) ?? "", "local-copy-" + Guid.NewGuid().ToString("N") + extension);
                 if (rules.Excludes(copyKey))
                 {
                     throw new IOException(UiText.Get("sync.localCopyIgnored"));
@@ -425,6 +427,7 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
             }
 
             store.SaveBaseline(pair, baseline);
+            return copyKey;
         }
     }
 

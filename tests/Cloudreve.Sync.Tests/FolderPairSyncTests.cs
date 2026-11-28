@@ -1336,14 +1336,20 @@ public sealed class FolderPairSyncTests : IDisposable
         site.Put(Root + "/doc", "cloud");
         var conflict = Assert.Single((await RunAsync()).Choices);
         var engine = new FolderPairSync(store, pair, new DriveClient(http, http, session, _ => { }));
-        await engine.ResolveConflictAsync(conflict, Enum.Parse<ConflictChoice>(choice), TestContext.Current.CancellationToken);
+        string? copyKey = await engine.ResolveConflictAsync(conflict, Enum.Parse<ConflictChoice>(choice), TestContext.Current.CancellationToken);
         Assert.Empty((await RunAsync()).Conflicts);
         Assert.Equal(expected, File.ReadAllText(path));
         Assert.Equal(expected, site.Files[Root + "/doc"].Text);
         if (choice == "KeepBoth")
         {
-            Assert.Equal("local", File.ReadAllText(Assert.Single(Directory.GetFiles(pair.Local, "local-copy-*"))));
+            string copy = Assert.Single(Directory.GetFiles(pair.Local, "local-copy-*"));
+            Assert.Equal(Path.GetFileName(copy), copyKey);
+            Assert.Equal("local", File.ReadAllText(copy));
             Assert.Contains(site.Files.Values, entry => entry.Text == "local");
+        }
+        else
+        {
+            Assert.Null(copyKey);
         }
     }
 

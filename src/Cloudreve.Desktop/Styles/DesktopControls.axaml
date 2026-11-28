@@ -89,6 +89,9 @@
   <Style Selector="TextBlock.warning">
     <Setter Property="Foreground" Value="{DynamicResource WarningInk}" />
   </Style>
+  <Style Selector="PathIcon.warning">
+    <Setter Property="Foreground" Value="{DynamicResource WarningInk}" />
+  </Style>
   <Style Selector="TextBlock.failure">
     <Setter Property="Foreground" Value="{DynamicResource DangerInk}" />
   </Style>

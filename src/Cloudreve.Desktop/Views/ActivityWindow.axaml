@@ -63,6 +63,11 @@
               </ItemsControl.ItemTemplate>
             </ItemsControl>
           </StackPanel>
+          <StackPanel x:Name="ConflictSection" Classes="reveal">
+            <TextBlock x:Name="ConflictTitle" Classes="activitySection" />
+            <StackPanel x:Name="ConflictRows" />
+            <TextBlock x:Name="ConflictMore" Classes="secondary" FontSize="12" Margin="56,2,16,5" />
+          </StackPanel>
           <StackPanel x:Name="ActiveSection" Classes="reveal">
             <TextBlock Classes="activitySection" Text="{d:Tr popup.syncing}" />
             <StackPanel x:Name="ActiveRows" />

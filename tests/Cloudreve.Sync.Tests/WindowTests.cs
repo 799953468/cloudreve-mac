@@ -354,6 +354,79 @@ public sealed class WindowTests : IDisposable
         }, TestContext.Current.CancellationToken);
     }
 
+    [Fact]
+    public async Task ConflictsReplaceUpToDateAndOfferMatchingChoices()
+    {
+        await using var ui = HeadlessUnitTestSession.StartNew(typeof(TestApplication));
+        await ui.Dispatch(async () =>
+        {
+            sessions.Save(new DriveSession("https://site.example/", "work", "Work", "cloudreve://my", "u", "access", "refresh",
+                DateTimeOffset.UtcNow.AddHours(1), DateTimeOffset.UtcNow.AddDays(1)));
+            var host = new WorkspaceHost(new DriveProfiles(sessions), transport: transport);
+            try
+            {
+                host.Start();
+                var drive = Assert.Single(host.Drives);
+                var pairId = Guid.NewGuid();
+                var remote = new DriveEntry("doc.rp", "cloudreve://my/axure/doc.rp", false, 1, "v2");
+                var result = new PairSyncResult(0, 0, 0, ["axure/doc.rp", "gone.txt", "Mixed"],
+                    [new FileConflict(pairId, "axure/doc.rp", "AA", remote), new FileConflict(pairId, "gone.txt", null, remote)], 0);
+                Assert.True(drive.UpdateConflicts(result, null, Serilog.Log.Logger));
+                // Seeing the same conflicts again is not news, so it does not alert twice.
+                Assert.False(drive.UpdateConflicts(result, null, Serilog.Log.Logger));
+                Assert.Equal([ConflictReason.ContentsDiffer, ConflictReason.DeletedLocally, ConflictReason.NeedsManualReview],
+                    drive.Conflicts.Select(conflict => conflict.Reason));
+
+                host.OpenPopup();
+                var popup = host.Popup!;
+                popup.UpdateLayout();
+                Assert.False(popup.Empty.IsVisible);
+                Assert.True(popup.ConflictSection.IsVisible);
+                Assert.Equal("冲突（3）", popup.ConflictTitle.Text);
+                Assert.Equal("3 个冲突需要处理", popup.Footer.Text);
+                Assert.Contains("warning", popup.StatusIcon.Classes);
+                Assert.DoesNotContain("healthy", popup.StatusIcon.Classes);
+                string?[] Buttons(int row)
+                {
+                    return popup.ConflictRows.Children[row].GetVisualDescendants().OfType<Button>().Select(button => button.Content as string).ToArray();
+                }
+
+                Assert.Equal(["以本地为准", "以云端为准", "都保留"], Buttons(0));
+                Assert.Equal(["以本地为准", "以云端为准"], Buttons(1));
+                Assert.Empty(Buttons(2));
+                Assert.Contains("本地和云端内容不同", Labels(popup.ConflictRows));
+                Assert.Contains("本地已删除，云端有修改", Labels(popup.ConflictRows));
+                Assert.Contains("Work · axure", Labels(popup.ConflictRows));
+
+                // A drive without a folder pair cannot resolve anything; the row reports why and keeps its choices.
+                Click(popup.ConflictRows.Children[0].GetVisualDescendants().OfType<Button>().First());
+                popup.UpdateLayout();
+                Assert.Contains(Labels(popup.ConflictRows), label => label?.StartsWith("处理失败：", StringComparison.Ordinal) == true);
+                Assert.Equal(3, Buttons(0).Length);
+
+                // A path scan replaces only the conflicts it covered.
+                drive.UpdateConflicts(new PairSyncResult(0, 0, 0, [], [], 0), new PairScanScope(["axure"]), Serilog.Log.Logger);
+                popup.Refresh();
+                popup.UpdateLayout();
+                Assert.Equal("冲突（2）", popup.ConflictTitle.Text);
+                Assert.DoesNotContain(Labels(popup.ConflictRows), label => label?.StartsWith("处理失败：", StringComparison.Ordinal) == true);
+
+                drive.UpdateConflicts(new PairSyncResult(0, 0, 0, [], [], 0), null, Serilog.Log.Logger);
+                popup.Refresh();
+                Assert.False(popup.ConflictSection.IsVisible);
+                Assert.Equal("文件已是最新。", popup.Footer.Text);
+                Assert.Contains("healthy", popup.StatusIcon.Classes);
+            }
+            finally
+            {
+                host.Popup?.Close();
+                await host.StopAsync();
+            }
+
+            return true;
+        }, TestContext.Current.CancellationToken);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
