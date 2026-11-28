@@ -120,7 +120,7 @@ internal sealed class PairScanScope
     private static bool RecreatedCandidate(string key, Dictionary<string, FileBaseline> baseline, PairInventory local, PairInventory remote)
     {
         return baseline.TryGetValue(key, out var known) && local.Nodes.TryGetValue(key, out var here) && here.Key == key &&
-               FolderPairSync.MayBeRecreatedInPlace(known, here, remote.Nodes.GetValueOrDefault(key));
+               DirectoryReconciler.MayBeRecreatedInPlace(known, here, remote.Nodes.GetValueOrDefault(key));
     }
 
     // Mirrors the identity check in SyncDirectoriesAsync that marks the directory as a conflict.

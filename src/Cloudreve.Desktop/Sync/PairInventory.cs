@@ -18,6 +18,8 @@ internal sealed class PairInventory
     internal const string Recovery = ".cloudreve-recovery";
     internal readonly Dictionary<string, PairNode> Nodes = new(StringComparer.OrdinalIgnoreCase);
     internal readonly HashSet<string> Excluded = new(StringComparer.OrdinalIgnoreCase);
+    // Paths where two scanned names differ only by case or normalization; their node is marked Unsupported.
+    internal readonly HashSet<string> Collisions = new(StringComparer.OrdinalIgnoreCase);
 
     internal static bool Reserved(string name)
     {
@@ -45,6 +47,7 @@ internal sealed class PairInventory
         }
 
         Nodes[node.Key] = node with { Kind = NodeKind.Unsupported, Remote = null };
+        Collisions.Add(node.Key);
         return false;
     }
 
