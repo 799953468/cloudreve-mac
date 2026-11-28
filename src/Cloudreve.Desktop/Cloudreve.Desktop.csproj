@@ -44,6 +44,9 @@
   <Target Name="PrepareMacDebugBundle" AfterTargets="Build" Condition="'$(DebugBundleRoot)' != ''">
     <Copy SourceFiles="Info.plist" DestinationFolder="$(DebugBundleRoot)/Contents" SkipUnchangedFiles="true" />
     <Copy SourceFiles="Assets/Cloudreve.icns" DestinationFolder="$(DebugBundleRoot)/Contents/Resources" SkipUnchangedFiles="true" />
+    <!-- A RID-less build copies native assets for every platform; codesign rejects folders such as
+         runtimes/browser-wasm/nativeassets/net9.0 as malformed nested bundles. Only macOS assets are used here. -->
+    <Exec Command="find &quot;$(DebugBundleRoot)/Contents/MacOS/runtimes&quot; -mindepth 1 -maxdepth 1 -type d ! -name 'osx*' -exec rm -rf {} +" Condition="Exists('$(DebugBundleRoot)/Contents/MacOS/runtimes')" />
     <Exec Command="/usr/bin/codesign --force --deep --sign - &quot;$(DebugBundleRoot)&quot;" />
     <Exec Command="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f &quot;$(DebugBundleRoot)&quot;" />
   </Target>
