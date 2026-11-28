@@ -110,6 +110,13 @@ dotnet test --solution CloudreveClient.slnx -c Release
 
 The tests use temporary folders, simulated server responses, and headless windows. They do not use a live Cloudreve account. Check changes to sign-in or storage-provider behavior against a real site as well.
 
+`RealServerTests` run the sync engine against a real Cloudreve server, as two computers paired with one cloud folder: edits, renames and deletions between them, catching up without a full scan, a conflict settled by modification time, a rebuilt folder, and the change search and trash behavior catch-up relies on. They are skipped unless all three variables are set. Each test creates its own folder under the account root and moves it to the trash afterwards, so use a test account and never commit the credentials:
+
+```sh
+CLOUDREVE_IT_SITE=https://cloud.example.com CLOUDREVE_IT_EMAIL=test@example.com CLOUDREVE_IT_PASSWORD=... \
+  dotnet test --project tests/Cloudreve.Sync.Tests -c Release --filter-class "*RealServerTests"
+```
+
 ### CI and release builds
 
 - [Test](.github/workflows/test.yml) runs the Release test suite on macOS for branch pushes and pull requests.
