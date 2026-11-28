@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -243,6 +244,14 @@ internal sealed partial class DriveClient(HttpClient api, HttpClient storage, Dr
     internal async Task<DriveEntry> StatAsync(string uri, CancellationToken cancel)
     {
         return ParseEntry(await JsonAsync(HttpMethod.Get, "file/info?uri=" + Uri.EscapeDataString(uri), cancel));
+    }
+
+    // Kept out of DriveEntry: a metadata-only change must not invalidate queued transfers that compare entries.
+    internal async Task<DateTimeOffset?> ModifiedAsync(string uri, CancellationToken cancel)
+    {
+        var data = await JsonAsync(HttpMethod.Get, "file/info?uri=" + Uri.EscapeDataString(uri), cancel);
+        return data.TryGetProperty("updated_at", out var value) && value.ValueKind == JsonValueKind.String &&
+               DateTimeOffset.TryParse(value.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var time) ? time : null;
     }
 
     internal async Task DownloadAsync(DriveEntry file, string destination, CancellationToken cancel, SyncActivity? activity = null)

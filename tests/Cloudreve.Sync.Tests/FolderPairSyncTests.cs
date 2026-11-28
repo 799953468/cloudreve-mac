@@ -1356,6 +1356,45 @@ public sealed class FolderPairSyncTests : IDisposable
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
+    public async Task NewerSideKeepsTheMoreRecentlyModifiedVersion(bool localNewer)
+    {
+        string path = Path.Combine(pair.Local, "doc");
+        site.Put(Root + "/doc", "cloud");
+        File.WriteAllText(path, "local");
+        var now = DateTimeOffset.UtcNow;
+        File.SetLastWriteTimeUtc(path, (localNewer ? now : now.AddHours(-1)).UtcDateTime);
+        site.Modified[Root + "/doc"] = localNewer ? now.AddHours(-1) : now;
+        var conflict = Assert.Single((await RunAsync()).Choices);
+        var engine = new FolderPairSync(store, pair, new DriveClient(http, http, session, _ => { }));
+
+        var (choice, local, remote) = await engine.NewerSideAsync(conflict, TestContext.Current.CancellationToken);
+        Assert.Equal(localNewer ? ConflictChoice.KeepLocal : ConflictChoice.KeepRemote, choice);
+        Assert.NotNull(local);
+        Assert.Equal(site.Modified[Root + "/doc"], remote);
+        await engine.ResolveConflictAsync(conflict, choice!.Value, TestContext.Current.CancellationToken);
+
+        Assert.Empty((await RunAsync()).Conflicts);
+        string expected = localNewer ? "local" : "cloud";
+        Assert.Equal(expected, File.ReadAllText(path));
+        Assert.Equal(expected, site.Files[Root + "/doc"].Text);
+        // Keeping the cloud version never discards the local one.
+        Assert.Equal(localNewer ? 0 : 1, Directory.Exists(Path.Combine(pair.Local, PairInventory.Recovery))
+            ? Directory.GetFiles(Path.Combine(pair.Local, PairInventory.Recovery), "*", SearchOption.AllDirectories).Length : 0);
+    }
+
+    [Fact]
+    public async Task NewerSideDeclinesWithoutACloudModificationTime()
+    {
+        site.Put(Root + "/doc", "cloud");
+        File.WriteAllText(Path.Combine(pair.Local, "doc"), "local");
+        var conflict = Assert.Single((await RunAsync()).Choices);
+        var engine = new FolderPairSync(store, pair, new DriveClient(http, http, session, _ => { }));
+        Assert.Null((await engine.NewerSideAsync(conflict, TestContext.Current.CancellationToken)).Choice);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
     public async Task RefusesStaleConflictDecisions(bool changeCloud)
     {
         string path = Path.Combine(pair.Local, "doc");
@@ -1724,6 +1763,7 @@ public sealed class FolderPairSyncTests : IDisposable
     {
         internal readonly Dictionary<string, (string Text, string Version)> Files = [];
         internal readonly Dictionary<string, string> Ids = [];
+        internal readonly Dictionary<string, DateTimeOffset> Modified = [];
         internal readonly HashSet<string> Folders = [Root];
         internal readonly List<string> TrashRequests = [];
         internal int Requests, Transfers;
@@ -1780,7 +1820,8 @@ public sealed class FolderPairSyncTests : IDisposable
             return new
             {
                 id = uri == Root ? RootId : folder ? Ids.GetValueOrDefault(uri, uri) : Ids[uri], name = Uri.UnescapeDataString(uri[(uri.LastIndexOf('/') + 1)..]), path = uri, type = folder ? 1 : 0,
-                size = folder ? 0 : Encoding.UTF8.GetByteCount(Files[uri].Text), primary_entity = folder || listing && OmitListedVersions ? null : Files[uri].Version
+                size = folder ? 0 : Encoding.UTF8.GetByteCount(Files[uri].Text), primary_entity = folder || listing && OmitListedVersions ? null : Files[uri].Version,
+                updated_at = Modified.TryGetValue(uri, out var modified) ? modified.ToString("O") : null
             };
         }
 

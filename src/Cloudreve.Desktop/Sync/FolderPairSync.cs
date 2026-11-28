@@ -337,6 +337,35 @@ internal sealed partial class FolderPairSync(FolderPairStore store, FolderPair p
         }
     }
 
+    // Within this margin the two times cannot say which side is newer: FAT stores 2-second times, and an upload
+    // copies the local time to the cloud.
+    internal static readonly TimeSpan ModifiedTimeMargin = TimeSpan.FromSeconds(2);
+
+    internal static ConflictChoice? NewerSide(DateTimeOffset? local, DateTimeOffset? remote)
+    {
+        if (local is not { } here || remote is not { } there || (here - there).Duration() <= ModifiedTimeMargin)
+        {
+            return null;
+        }
+
+        return here > there ? ConflictChoice.KeepLocal : ConflictChoice.KeepRemote;
+    }
+
+    // Reads both modification times of a file that exists on both sides. Choice is null when they cannot decide.
+    internal async Task<(ConflictChoice? Choice, DateTimeOffset? Local, DateTimeOffset? Remote)> NewerSideAsync(FileConflict conflict, CancellationToken cancel)
+    {
+        PairInventory.ValidateKey(conflict.Key);
+        if (conflict.PairId != pair.Marker || conflict.LocalHash == null || conflict.Remote == null)
+        {
+            return (null, null, null);
+        }
+
+        string path = Path.Combine(pair.Local, conflict.Key);
+        DateTimeOffset? local = LocalFile.Inspect(path) == NodeKind.File ? new DateTimeOffset(File.GetLastWriteTimeUtc(path)) : null;
+        var remote = await drive.ModifiedAsync(conflict.Remote.Uri, cancel);
+        return (NewerSide(local, remote), local, remote);
+    }
+
     // Returns the key of the local copy that KeepBoth created, so the caller can scan it.
     internal async Task<string?> ResolveConflictAsync(FileConflict conflict, ConflictChoice choice, CancellationToken cancel)
     {

@@ -12,7 +12,8 @@ internal sealed record DisplayPreferences(
     bool FastPopup = true,
     bool CredentialAlerts = true,
     bool LogToFile = true,
-    int LogMaxFiles = 7);
+    int LogMaxFiles = 7,
+    bool AutoResolveNewer = true);
 
 internal sealed class DesktopPreferences(string directory)
 {

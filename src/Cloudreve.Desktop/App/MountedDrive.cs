@@ -51,6 +51,8 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
     private readonly SemaphoreSlim passGate = new(1, 1);
     private FolderPairSync? engine;
     private ILogger? pairLogger;
+    // Conflicts the newer-version rule already declined or failed to resolve; a changed conflict is a new record and is tried again.
+    private readonly HashSet<PairConflict> autoDeclined = [];
     private bool runningPass;
     private bool remoteUnavailable;
 
@@ -92,6 +94,7 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
         remoteUnavailable = false;
         engine = null;
         pairLogger = null;
+        autoDeclined.Clear();
         lock (conflictGate)
         {
             conflicts = new Dictionary<string, PairConflict>(StringComparer.OrdinalIgnoreCase);
@@ -192,7 +195,15 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
                     var summaryLevel = result.Uploaded + result.Downloaded + result.Removed + result.Conflicts.Count > 0 ? LogEventLevel.Information : LogEventLevel.Debug;
                     logger.ForContext("ScanScope", attempt.Scope == null ? "Full" : "Paths").ForContext("FullScanReason", attempt.Scope == null ? attempt.FullReason : null).Write(summaryLevel, "Folder pair scan finished in {ElapsedMs} ms: {Uploaded} uploaded, {Downloaded} downloaded, {Removed} removed, {Conflicts} conflicts, {DeferredDirectories} directories deferred, {DeferredFiles} files deferred",
                         attempt.ElapsedMs, result.Uploaded, result.Downloaded, result.Removed, result.Conflicts.Count, result.DeferredDirectories, result.DeferredFiles);
-                    if (UpdateConflicts(result, attempt.Scope, logger) && Program.Preferences.Current.ConflictAlerts)
+                    var added = UpdateConflicts(result, attempt.Scope, logger);
+                    if (Program.Preferences.Current.AutoResolveNewer)
+                    {
+                        await ResolveNewerAsync(engine, logger, cancel);
+                    }
+
+                    // Only alert about conflicts that are still waiting for the user.
+                    var open = Conflicts.ToHashSet();
+                    if (Program.Preferences.Current.ConflictAlerts && added.Any(open.Contains))
                     {
                         Notice?.Invoke(UiText.Get("app.syncConflictNotice"));
                     }
@@ -228,8 +239,8 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
         }
     }
 
-    // Replaces the conflicts this pass covered. Returns whether any of them is new.
-    internal bool UpdateConflicts(PairSyncResult result, PairScanScope? scope, ILogger logger)
+    // Replaces the conflicts this pass covered. Returns the ones that are new.
+    internal IReadOnlyList<PairConflict> UpdateConflicts(PairSyncResult result, PairScanScope? scope, ILogger logger)
     {
         var choices = new Dictionary<string, FileConflict>(StringComparer.OrdinalIgnoreCase);
         foreach (var choice in result.Choices)
@@ -282,7 +293,57 @@ internal sealed class MountedDrive(DriveProfiles profiles, SessionFileStore stor
             logger.Information("Sync conflict cleared at {ConflictKey}", key);
         }
 
-        return added.Count > 0;
+        return added;
+    }
+
+    // Keeps whichever side of a two-sided content conflict was modified more recently.
+    private async Task ResolveNewerAsync(FolderPairSync current, ILogger logger, CancellationToken cancel)
+    {
+        autoDeclined.IntersectWith(Conflicts);
+        foreach (var conflict in Conflicts.Where(item => item.Reason == ConflictReason.ContentsDiffer && !autoDeclined.Contains(item)))
+        {
+            cancel.ThrowIfCancellationRequested();
+            ConflictChoice? choice;
+            DateTimeOffset? local, remote;
+            try
+            {
+                (choice, local, remote) = await current.NewerSideAsync(conflict.Choice!, cancel);
+            }
+            catch (Exception ex) when (!cancel.IsCancellationRequested)
+            {
+                autoDeclined.Add(conflict);
+                logger.ForContext("ConflictKey", conflict.Key).WriteFailure(LogEventLevel.Warning, "Read modification times for sync conflict", ex);
+                continue;
+            }
+
+            if (choice is not { } newer)
+            {
+                autoDeclined.Add(conflict);
+                logger.Information("Sync conflict at {ConflictKey} left for the user: local modified {LocalModified}, cloud modified {CloudModified}",
+                    conflict.Key, local, remote);
+                continue;
+            }
+
+            logger.Information("Sync conflict at {ConflictKey} keeps the newer {ConflictChoice}: local modified {LocalModified}, cloud modified {CloudModified}",
+                conflict.Key, newer, local, remote);
+            Activity.Start(UiText.Get(newer == ConflictChoice.KeepLocal ? "activity.upload" : "activity.download"), conflict.Key);
+            try
+            {
+                await ResolveConflictAsync(conflict, newer, cancel);
+                Activity.Finish(UiText.Get("activity.done"));
+            }
+            catch (Exception) when (!cancel.IsCancellationRequested)
+            {
+                // ResolveConflictAsync logged the failure; leave the conflict for the user instead of retrying every pass.
+                autoDeclined.Add(conflict);
+                Activity.Finish(UiText.Get("activity.failed"));
+            }
+            catch
+            {
+                Activity.Finish(UiText.Get("activity.cancelled"));
+                throw;
+            }
+        }
     }
 
     internal async Task ResolveConflictAsync(PairConflict conflict, ConflictChoice choice, CancellationToken cancel = default)

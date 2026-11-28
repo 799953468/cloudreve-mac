@@ -24,4 +24,18 @@ public class SyncDecisionTests
         FileBaseline? baseline = known ? new FileBaseline("a", "1") : null;
         Assert.Equal(expected, SyncDecision.ForFile(baseline, local, remote).ToString());
     }
+
+    [Theory]
+    [InlineData(0, -3600, "KeepLocal")]
+    [InlineData(-3600, 0, "KeepRemote")]
+    [InlineData(0, 2, null)]
+    [InlineData(0, -2, null)]
+    [InlineData(0, null, null)]
+    [InlineData(null, 0, null)]
+    public void NewerSideNeedsAClearlyNewerTime(int? localOffset, int? remoteOffset, string? expected)
+    {
+        var start = new DateTimeOffset(2026, 11, 28, 12, 0, 0, TimeSpan.Zero);
+        var choice = Cloudreve.Desktop.FolderPairSync.NewerSide(localOffset is { } l ? start.AddSeconds(l) : null, remoteOffset is { } r ? start.AddSeconds(r) : null);
+        Assert.Equal(expected, choice?.ToString());
+    }
 }

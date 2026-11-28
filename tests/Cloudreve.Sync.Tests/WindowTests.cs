@@ -83,7 +83,8 @@ public sealed class WindowTests : IDisposable
                 Assert.True(settings.DrivePage.IsVisible);
                 settings.Navigation.SelectedIndex = 1;
                 Assert.True(settings.GeneralPage.IsVisible);
-                Assert.Equal(5, settings.GeneralPage.GetVisualDescendants().OfType<ToggleSwitch>().Count());
+                Assert.Equal(6, settings.GeneralPage.GetVisualDescendants().OfType<ToggleSwitch>().Count());
+                Assert.Contains("冲突时保留较新的版本", Labels(settings.GeneralPage));
                 settings.RequestedThemeVariant = dark ? ThemeVariant.Dark : ThemeVariant.Light;
                 settings.UpdateLayout();
                 var selects = settings.GeneralPage.GetVisualDescendants().OfType<ComboBox>().ToArray();
@@ -371,9 +372,9 @@ public sealed class WindowTests : IDisposable
                 var remote = new DriveEntry("doc.rp", "cloudreve://my/axure/doc.rp", false, 1, "v2");
                 var result = new PairSyncResult(0, 0, 0, ["axure/doc.rp", "gone.txt", "Mixed"],
                     [new FileConflict(pairId, "axure/doc.rp", "AA", remote), new FileConflict(pairId, "gone.txt", null, remote)], 0);
-                Assert.True(drive.UpdateConflicts(result, null, Serilog.Log.Logger));
+                Assert.Equal(3, drive.UpdateConflicts(result, null, Serilog.Log.Logger).Count);
                 // Seeing the same conflicts again is not news, so it does not alert twice.
-                Assert.False(drive.UpdateConflicts(result, null, Serilog.Log.Logger));
+                Assert.Empty(drive.UpdateConflicts(result, null, Serilog.Log.Logger));
                 Assert.Equal([ConflictReason.ContentsDiffer, ConflictReason.DeletedLocally, ConflictReason.NeedsManualReview],
                     drive.Conflicts.Select(conflict => conflict.Reason));
 

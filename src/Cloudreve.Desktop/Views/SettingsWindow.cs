@@ -312,6 +312,8 @@ internal sealed partial class SettingsWindow : Window
         var languages = new[] { UiLanguage.SystemDefault, UiLanguage.Chinese, UiLanguage.English };
         Select(Group("languageSettings"), "language", [UiText.Get("settings.languageAuto"), "简体中文", "English"], Array.IndexOf(languages, prefs.Current.Language),
             i => prefs.Save(prefs.Current with { Language = languages[i] }));
+        var sync = Group("syncSettings");
+        Toggle(sync, "autoResolveNewer", prefs.Current.AutoResolveNewer, v => prefs.Save(prefs.Current with { AutoResolveNewer = v }));
         var notifications = Group("notificationSettings");
         Toggle(notifications, "notifyCredentialExpired", prefs.Current.CredentialAlerts, v => prefs.Save(prefs.Current with { CredentialAlerts = v }));
         Toggle(notifications, "notifyFileConflict", prefs.Current.ConflictAlerts, v => prefs.Save(prefs.Current with { ConflictAlerts = v }));
